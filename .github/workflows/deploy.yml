@@ -1,0 +1,62 @@
+# Сборка и публикация на GitHub Pages при каждом пуше в main. Сайт не обновится, если упали тесты
+# логики или автотесты экранов на собранном сайте, или если не задан пароль сайта
+# (секрет LAGER_PASSWORD, как его добавить, сказано в README).
+name: Публикация
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Пароль сайта задан
+        env:
+          LAGER_PASSWORD: ${{ secrets.LAGER_PASSWORD }}
+        run: |
+          if [ -z "$LAGER_PASSWORD" ]; then
+            echo "::error::Не задан пароль сайта. Добавь его: Settings → Secrets and variables → Actions → New repository secret, имя LAGER_PASSWORD."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm test
+      - name: Сборка с паролем
+        env:
+          LAGER_PASSWORD: ${{ secrets.LAGER_PASSWORD }}
+        run: npm run build
+      - name: Браузер для автотестов
+        run: npx playwright install --with-deps --only-shell chromium
+      # Отчёт и трассы не выкладываются: в них виден введённый пароль сайта. Что упало, видно в логе шага.
+      - name: Автотесты экранов
+        env:
+          LAGER_PASSWORD: ${{ secrets.LAGER_PASSWORD }}
+        run: npm run e2e
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

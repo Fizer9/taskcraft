@@ -18,13 +18,14 @@ import {
 import { formatClock, formatDate, formatDuration, formatTimer, formatTimerSeconds } from '../game/time';
 import type { State, Task } from '../game/types';
 import { campView, type CampView, type Tone } from '../game/view';
-import { CLASS_AT, CLASS_BY_LEVEL, LEVEL_ROMAN, SHIFT_NAME, W } from '../game/words';
-import { SCENE, SCENE_H, SCENE_W } from '../scene/scene';
+import { CLASS_AT, CLASS_BY_LEVEL, SHIFT_NAME, W } from '../game/words';
+import { SCENE, SCENE_H, SCENE_W, assetUrl } from '../scene/scene';
 import type { Ui } from './App';
 import { useSize } from './hooks';
 import { GIcon, LIcon } from './Icon';
-import { TaskMeta } from './parts';
+import { LevelMark, TaskMeta } from './parts';
 import { Scene } from './Scene';
+import { syncTrouble } from './SyncPanel';
 
 export function Camp({ ui }: { ui: Ui }) {
   const { store, now } = ui;
@@ -49,9 +50,10 @@ export function Camp({ ui }: { ui: Ui }) {
 
   const compact = root.h > 0 && root.h < 700;
   const rowH = compact ? 40 : 44;
-  // Сцена не сжимается ниже того, что нужно, чтобы были видны все фигуры; на низком экране чуть срезается.
-  const sceneNeed = (CONTENT.bottom - CONTENT.top) * (root.w / SCENE_W) + TOPBAR_H - SHEET_OVERLAP;
-  const sceneMin = Math.max(170, Math.round(sceneNeed) - (compact ? 30 : 0));
+  // Сцене оставляем столько, чтобы все фигуры с номерами были видны почти во всю ширину экрана.
+  // На низком экране она уменьшается сильнее (sceneBox), чтобы под ней уместилась ещё строка плана.
+  const contentH = (CONTENT.bottom - CONTENT.top) * (root.w / SCENE_W) * (compact ? COMPACT_SCALE : ROW_SCALE);
+  const sceneMin = Math.max(170, Math.round(contentH + TOPBAR_H + BADGE_H));
   const fit = Math.max(1, Math.min(5, Math.floor((root.h - fixedH - sceneMin) / rowH)));
   // Задача из карточки «Дальше» в списке не повторяется.
   const nextInCard = !v.asleep && !ui.cheer && !v.onBreak && !current;
@@ -59,19 +61,31 @@ export function Camp({ ui }: { ui: Ui }) {
   const shown = list.length > fit ? list.slice(0, fit - 1) : list;
   const hidden = list.length - shown.length;
 
+  const box = sceneBox(wrap.w, wrap.h);
+  const bg = SCENE.backgrounds[v.light] ?? SCENE.backgrounds.day;
+
   return (
     <div class={`camp${compact ? ' is-compact' : ''}`} ref={rootRef}>
+      <h1 class="sr-only">{W.camp}</h1>
       <div class="scene-wrap" ref={wrapRef}>
-        <div class="scene-box" style={sceneBox(wrap.w, wrap.h + SHEET_OVERLAP)}>
+        {box.gaps && bg && <img class="scene-blur" src={assetUrl(bg)} alt="" aria-hidden="true" draggable={false} />}
+        <div class="scene-box" style={box.style}>
           <Scene
             view={v}
             timer={v.running || (current && !v.onBreak) ? timer : null}
             onTask={(id) => ui.open({ kind: 'task', taskId: id })}
             onLetters={() => ui.open({ kind: 'letters' })}
-            onMore={() => ui.go('plan')}
+            unit={box.unit}
           />
         </div>
-        <TopBar s={s} v={v} now={now} />
+        <TopBar ui={ui} v={v} />
+        {(v.extraSeated > 0 || v.extraRoad > 0) && (
+          <button class="scene-more" onClick={() => ui.go('plan')}>
+            {v.extraSeated > 0 && `ещё ${v.extraSeated} у костра`}
+            {v.extraSeated > 0 && v.extraRoad > 0 && ' · '}
+            {v.extraRoad > 0 && `ещё ${v.extraRoad} на дороге`}
+          </button>
+        )}
       </div>
 
       <section class="sheet" ref={sheetRef} aria-label="Задачи дня">
@@ -87,7 +101,7 @@ export function Camp({ ui }: { ui: Ui }) {
 
         {!v.asleep && (list.length > 0 || v.doneToday > 0) && (
           <div class="list-head">
-            <span class="sc">{W.moreToday}</span>
+            <h2 class="sc">{W.moreToday}</h2>
             {v.doneToday > 0 && (
               <span class="list-done">
                 <GIcon name="check" size={13} />
@@ -118,7 +132,7 @@ export function Camp({ ui }: { ui: Ui }) {
               ))}
             </span>
             <span class="row-title row-muted">
-              {W.evening}: {v.later.map((t) => t.title.toLowerCase()).join(', ')}
+              {W.evening}: {v.later.map((t) => t.title).join(', ')}
             </span>
             <LIcon name="chevron" size={16} />
           </button>
@@ -130,57 +144,104 @@ export function Camp({ ui }: { ui: Ui }) {
 
 /** Лист заходит на сцену скруглённым краем. */
 const SHEET_OVERLAP = 22;
-/** Высота верхней полосы с датой, золотом и маной. */
-const TOPBAR_H = 46;
+/** Нижний край верхней полосы с датой, золотом и маной. */
+const TOPBAR_H = 42;
+/** Номер над макушкой вместе с хвостиком, в пикселях экрана: от масштаба сцены не зависит. */
+const BADGE_H = 40;
 
-/** Что на картинке должно быть видно: от номеров над нежитью на дороге до брёвен впереди. */
+/** Что на картинке должно быть видно: от макушки самого дальнего скелета на дороге до ног тех, кто сидит впереди. */
 const CONTENT = (() => {
   let top = SCENE_H;
-  for (const sp of Object.values(SCENE.sprites)) if (sp.head) top = Math.min(top, sp.head[1] - 34);
+  for (const sp of Object.values(SCENE.sprites)) if (sp.head) top = Math.min(top, sp.head[1]);
   const bottom = Math.max(...Object.values(SCENE.spots).map((p) => p[1])) + 12;
   return { top: Math.max(0, top), bottom: Math.min(SCENE_H, bottom) };
 })();
 
+/** Насколько сцена может уменьшиться ради строки плана: на обычном экране и на низком. */
+const ROW_SCALE = 0.95;
+const COMPACT_SCALE = 0.8;
+/** Меньше сцена не становится: фигуры должны оставаться различимыми. */
+const MIN_SCALE = 0.62;
+
 /**
- * Картинка сцены покрывает место над листом. Если она выше этого места, лишнее срезается так,
- * чтобы нужная часть встала посередине между верхней полосой и листом.
+ * Картинка сцены покрывает место над листом (h; нижние SHEET_OVERLAP из них под краем листа). Если
+ * нужная часть не помещается между верхней полосой и листом, картинка уменьшается, а по бокам
+ * проступает размытый фон (gaps). Лишнее срезается так, чтобы нужная часть встала посередине.
  */
-function sceneBox(w: number, visibleH: number): preact.JSX.CSSProperties {
-  if (!w || !visibleH) return { width: '100%', aspectRatio: `${SCENE_W} / ${SCENE_H}` };
+function sceneBox(w: number, h: number): { style: preact.JSX.CSSProperties; gaps: boolean; unit?: number } {
+  if (!w || !h) return { style: { width: '100%', aspectRatio: `${SCENE_W} / ${SCENE_H}` }, gaps: false };
   const ratio = SCENE_H / SCENE_W;
-  const scale = Math.max(1, visibleH / (w * ratio));
-  const boxW = w * scale;
+  // Между этими линиями экрана должна встать нужная часть картинки.
+  const from = TOPBAR_H + BADGE_H;
+  const to = h - SHEET_OVERLAP;
+  const coverW = Math.max(w, h / ratio);
+  const fitW = ((to - from) / (CONTENT.bottom - CONTENT.top)) * SCENE_W;
+  const boxW = Math.max(w * MIN_SCALE, Math.min(coverW, fitW));
   const boxH = boxW * ratio;
   const k = boxH / SCENE_H;
-  const want = (TOPBAR_H + visibleH - SHEET_OVERLAP) / 2 - ((CONTENT.top + CONTENT.bottom) / 2) * k;
-  const top = Math.min(0, Math.max(visibleH - boxH, want));
-  return { width: `${boxW}px`, height: `${boxH}px`, left: `${(w - boxW) / 2}px`, top: `${top}px` };
+  const want = (from + to) / 2 - ((CONTENT.top + CONTENT.bottom) / 2) * k;
+  // Сначала стараемся обойтись без пустот, но нужная часть важнее: номера не уходят под верхнюю полосу.
+  const minTop = from - CONTENT.top * k;
+  const maxTop = to - CONTENT.bottom * k;
+  let top = Math.min(0, Math.max(h - boxH, want));
+  top = minTop > maxTop ? minTop : Math.min(maxTop, Math.max(minTop, top));
+  const gaps = boxW < w - 0.5 || top > 0.5 || top + boxH < h - 0.5;
+  return { style: { width: `${boxW}px`, height: `${boxH}px`, left: `${(w - boxW) / 2}px`, top: `${top}px` }, gaps, unit: k };
 }
 
-function TopBar({ s, v, now }: { s: State; v: CampView; now: number }) {
+function TopBar({ ui, v }: { ui: Ui; v: CampView }) {
+  const { now } = ui;
+  const s = ui.store.state;
   const mana = Math.round(s.hero.mana);
   const lvl = heroLevel(s.hero.xp);
   return (
     <div class="topbar">
-      <div class="chip chip-date" aria-label={`${formatDate(s.day)}, ${formatClock(now)}, ${SHIFT_NAME[v.asleep ? 'night' : v.shift]}`}>
+      <div class="chip chip-date">
         <GIcon name={v.light === 'night' ? 'zzz' : v.light === 'evening' ? 'sunset' : 'sun'} size={15} class="ic-sun" />
-        <span class="chip-day">{formatDate(s.day).split(',')[0]}</span>
-        {formatClock(now)}
-        <span class="chip-shift">{SHIFT_NAME[v.asleep ? 'night' : v.shift]}</span>
+        <span class="chip-day" aria-hidden="true">
+          {formatDate(s.day).split(',')[0]}
+        </span>
+        <span aria-hidden="true">{formatClock(now)}</span>
+        <span class="chip-shift" aria-hidden="true">
+          {SHIFT_NAME[v.asleep ? 'night' : v.shift]}
+        </span>
+        <span class="sr-only">{`${formatDate(s.day)}, ${formatClock(now)}, ${SHIFT_NAME[v.asleep ? 'night' : v.shift]}`}</span>
       </div>
-      <div class="chip chip-gold" aria-label={`${W.gold}: ${s.hero.gold}, уровень героя ${lvl.level}`}>
+      <SyncBadge ui={ui} />
+      <div class="chip chip-gold">
         <GIcon name="coins" size={17} />
-        {s.hero.gold.toLocaleString('ru-RU')}
-        <span class="chip-level">ур. {lvl.level}</span>
+        <span aria-hidden="true">{s.hero.gold.toLocaleString('ru-RU')}</span>
+        <span class="chip-level" aria-hidden="true">
+          ур. {lvl.level}
+        </span>
+        <span class="sr-only">{`${W.gold}: ${s.hero.gold}, уровень героя ${lvl.level}`}</span>
       </div>
-      <div class="chip chip-mana" aria-label={`${W.mana}: ${mana} из ${MANA_MAX}`}>
+      <div class="chip chip-mana">
         <span class="mana-gem" aria-hidden="true" />
         <span class="bar" aria-hidden="true">
           <span style={{ width: `${(mana / MANA_MAX) * 100}%` }} />
         </span>
-        {mana}
+        <span aria-hidden="true">{mana}</span>
+        <span class="sr-only">{`${W.mana}: ${mana} из ${MANA_MAX}`}</span>
       </div>
     </div>
+  );
+}
+
+/** Значок в верхней полосе, пока игра не сохраняется в GitHub. Открывает, что случилось и что делать. */
+function SyncBadge({ ui }: { ui: Ui }) {
+  const trouble = syncTrouble(ui.sync, ui.now);
+  if (!trouble) return null;
+  const label = trouble === 'stale' ? 'Нет связи с GitHub: последние действия ещё не сохранены там' : 'Игра не сохраняется в GitHub';
+  return (
+    <button
+      class={`chip chip-alert${trouble === 'stale' ? ' is-mild' : ''}`}
+      aria-label={label}
+      title={label}
+      onClick={() => ui.open(ui.sync.status.phase === 'conflict' ? { kind: 'syncConflict' } : { kind: 'sync' })}
+    >
+      <LIcon name="cloudAlert" size={19} />
+    </button>
   );
 }
 
@@ -189,7 +250,9 @@ export function CallLabel() {
   return (
     <>
       <span class="lbl-long">{W.callToFire}</span>
-      <span class="lbl-short">{W.callToFireShort}</span>
+      <span class="lbl-short" aria-hidden="true">
+        {W.callToFireShort}
+      </span>
     </>
   );
 }
@@ -204,7 +267,7 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
       <div class="card">
         <div class="card-head">
           <GIcon name="zzz" size={18} class="ic-gold" />
-          <span class="sc">Отряд спит</span>
+          <h2 class="sc">Отряд спит</h2>
         </div>
         <div class="card-title">Доброй ночи</div>
         <div class="card-sub">
@@ -228,7 +291,7 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
       <div class="card card-done">
         <div class="card-head">
           <GIcon name="check" size={18} class="ic-green" />
-          <span class="sc">Сделано!</span>
+          <h2 class="sc">Сделано!</h2>
           {r.reward.frog && <span class="pill pill-frog">лягушка съедена</span>}
           <button class="link-btn" onClick={() => {
             store.act((st) => undoComplete(st, cheer.taskId));
@@ -245,11 +308,22 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
             <GIcon name="coins" size={15} />+{r.reward.gold} золота
           </span>
           <span class="rw rw-xp">
-            +{r.reward.xp} опыта{r.reward.frog ? ', ×2' : ''}
+            +{r.reward.xp} опыта
+            {r.reward.frog && (
+              <>
+                <span aria-hidden="true">, ×2</span>
+                <span class="sr-only">, вдвое за лягушку</span>
+              </>
+            )}
           </span>
           {r.lair && (
             <span class="rw rw-lair">
-              {W.lair} {r.lair.before} → {r.lair.after}
+              <span aria-hidden="true">
+                {W.lair} {r.lair.before} → {r.lair.after}
+              </span>
+              <span class="sr-only">
+                {W.lair}: было {r.lair.before}, стало {r.lair.after}
+              </span>
             </span>
           )}
           {r.undead && <span class="rw rw-lair">нежить упокоена</span>}
@@ -258,7 +332,9 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
           <>
             <div class="next">
               <span class="next-label">Дальше:</span>
-              <span class={`num num-${v.tones.get(next.id) === 'undead' ? 'undead' : 'today'} num-sm`}>{v.numbers.get(next.id)}</span>
+              <span class={`num num-${v.tones.get(next.id) === 'undead' ? 'undead' : 'today'} num-sm`} aria-hidden="true">
+                {v.numbers.get(next.id)}
+              </span>
               <span class="next-title">{next.title}</span>
             </div>
             <div class="btns">
@@ -293,7 +369,7 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
       <div class="card card-break">
         <div class="card-head">
           <GIcon name="campfire" size={18} class="ic-fire" />
-          <span class="sc">Привал</span>
+          <h2 class="sc">Привал</h2>
           <span class="card-head-right">{formatDuration(restMin)}</span>
         </div>
         <div class="card-title">Отряд отдыхает у огня</div>
@@ -317,10 +393,10 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
       <div class="card">
         <div class="card-head">
           <GIcon name="hourglass" size={16} class="ic-gold" />
-          <span class="sc">Ты ещё у костра?</span>
+          <h2 class="sc">Ты ещё у огня?</h2>
         </div>
         <div class="card-title card-title-sm">{v.current.title}</div>
-        <div class="card-sub">Долго не было отметок, и таймер встал в {formatClock(since)}. Если работа шла всё это время, оно вернётся в задачу.</div>
+        <div class="card-sub">В игру долго не заглядывали, и таймер встал в {formatClock(since)}. Если работа всё это время шла, нажми «{W.stillWorking}»: эти минуты вернутся в задачу.</div>
         <div class="btns">
           <button class="btn btn-gold" onClick={() => store.act((st, n) => confirmWorking(st, n))}>
             {W.stillWorking}
@@ -343,8 +419,8 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
     return (
       <div class="card">
         <div class="card-head">
-          <span class="num num-current num-sm">{v.numbers.get(cur.id)}</span>
-          <span class="sc">{W.nowAtFire}</span>
+          <span class="num num-current num-sm" aria-hidden="true">{v.numbers.get(cur.id)}</span>
+          <h2 class="sc">{W.nowAtFire}</h2>
           {s.frogId === cur.id && (
             <span class="pill pill-frog">
               <GIcon name="frog" size={15} />
@@ -356,7 +432,7 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
           <span class="card-title">{cur.title}</span>
         </button>
         <div class="card-sub">
-          {q ? q.name : 'Без похода'} · {LEVEL_ROMAN[cur.level]} уровень · {CLASS_AT[cls]}
+          {q ? q.name : 'Без похода'} · <LevelMark level={cur.level} /> · {CLASS_AT[cls]}
         </div>
         <div class="timer">
           <GIcon name="hourglass" size={16} class="ic-gold" />
@@ -400,10 +476,12 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
       <div class="card">
         <div class="card-head">
           <GIcon name="campfire" size={18} class="ic-fire" />
-          <span class="sc">{W.atFireEmpty}</span>
+          <h2 class="sc">{W.atFireEmpty}</h2>
         </div>
         <div class="next next-big">
-          <span class={`num num-${v.tones.get(next.id) ?? 'today'} num-sm`}>{v.numbers.get(next.id)}</span>
+          <span class={`num num-${v.tones.get(next.id) ?? 'today'} num-sm`} aria-hidden="true">
+            {v.numbers.get(next.id)}
+          </span>
           <span class="next-title">{next.title}</span>
           <TaskMeta s={s} t={next} />
         </div>
@@ -425,7 +503,7 @@ function MainCard({ ui, v, timer, seconds }: { ui: Ui; v: CampView; timer: strin
     <div class="card">
       <div class="card-head">
         <GIcon name="campfire" size={18} class="ic-fire" />
-        <span class="sc">{v.doneToday > 0 ? 'План дня выполнен' : 'Отряд не собран'}</span>
+        <h2 class="sc">{v.doneToday > 0 ? 'План дня выполнен' : 'Отряд не собран'}</h2>
       </div>
       <div class="card-sub">
         {v.doneToday > 0

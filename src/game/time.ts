@@ -1,6 +1,6 @@
 // Игровое время: дни, смены, освещение. Всё в местном времени устройства.
 import { DAY_STARTS_AT_HOUR, HOUR, SUMMARY_BEFORE_BED } from './rules';
-import type { DayKey, Settings } from './types';
+import type { DayKey, Repeat, Settings } from './types';
 
 export type Shift = 'morning' | 'work' | 'evening' | 'weekend' | 'night';
 export type Light = 'day' | 'evening' | 'night';
@@ -41,6 +41,32 @@ export function minutesOfDay(ts: number): number {
 
 export function isWorkDay(day: DayKey, s: Settings): boolean {
   return s.workDays.includes(parseDay(day).getDay());
+}
+
+/** Приходит ли повторяющаяся задача в этот день. */
+export function repeatsOn(r: Repeat, day: DayKey, s: Settings): boolean {
+  if (r.every === 'day') return true;
+  if (r.every === 'workday') return isWorkDay(day, s);
+  return parseDay(day).getDay() === r.weekday;
+}
+
+/** Ближайший день, начиная с from, когда задача придёт; null, если таких дней нет (нет рабочих дней). */
+export function nextRepeat(r: Repeat, from: DayKey, s: Settings): DayKey | null {
+  for (let i = 0; i < 7; i++) {
+    const day = addDays(from, i);
+    if (repeatsOn(r, day, s)) return day;
+  }
+  return null;
+}
+
+/** Что не так с распорядком, если смены в нём путаются; null, если всё в порядке. */
+export function scheduleError(s: Settings): string | null {
+  const dayStart = DAY_STARTS_AT_HOUR * 60;
+  const bed = s.bedtime < dayStart ? s.bedtime + 24 * 60 : s.bedtime;
+  if (s.workStart < dayStart) return `Работа может начаться не раньше ${DAY_STARTS_AT_HOUR}:00: в это время начинается новый игровой день.`;
+  if (s.workEnd <= s.workStart) return 'Конец работы должен быть позже начала.';
+  if (bed - SUMMARY_BEFORE_BED / 60_000 < s.workEnd) return `Отбой должен быть хотя бы на ${SUMMARY_BEFORE_BED / 60_000} минут позже конца работы.`;
+  return null;
 }
 
 export function shiftAt(ts: number, s: Settings): Shift {
@@ -85,7 +111,6 @@ export function formatMinutes(m: number): string {
   return `${Math.floor(m / 60) % 24}:${pad(m % 60)}`;
 }
 
-/** 0:42 или 1:05:10 для таймера. */
 /** Таймер задачи в часах и минутах: «0:42», «2:05». */
 export function formatTimer(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 60_000));
@@ -104,6 +129,11 @@ export function formatDuration(min: number): string {
   if (h === 0) return `${m} мин`;
   if (m === 0) return `${h} ч`;
   return `${h} ч ${m} мин`;
+}
+
+/** «24 октября 2027 г.» */
+export function formatDayLong(day: DayKey): string {
+  return parseDay(day).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 export function formatDue(due: DayKey, today: DayKey): string {

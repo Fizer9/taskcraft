@@ -1,5 +1,7 @@
 node_modules/
 dist/
+test-results/
+playwright-report/
 scripts/render-camp/node_modules/
 scripts/render-camp/kaykit/
 scripts/render-camp/out/

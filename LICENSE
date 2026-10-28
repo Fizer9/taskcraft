@@ -1,0 +1,11 @@
+© 2026, автор «Лагеря у костра». Все права защищены.
+
+Код и тексты этого репозитория можно читать, но нельзя копировать, изменять, публиковать
+и распространять без письменного разрешения автора.
+
+Сторонние материалы в проекте распространяются по своим лицензиям, их тексты лежат
+в public/licenses/:
+- модели лагеря KayKit (Kay Lousberg), CC0;
+- иконки с game-icons.net (Lorc, Delapouite, Sbed, Zeromancer), CC BY 3.0;
+- шрифты Alegreya, Alegreya SC и Alegreya Sans (Huerta Tipográfica), SIL Open Font License 1.1;
+- библиотека Preact (Jason Miller), MIT.

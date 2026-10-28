@@ -6,11 +6,11 @@
 //
 // Что менялось только с одной стороны, берётся оттуда. Что менялось с обеих, берётся у той,
 // где действовали позже. Золото, опыт, мана, итоги дня и время на задаче складываются
-// приростами обеих сторон. Задачи и походы сливаются поштучно: добавленные с обеих сторон
-// остаются, удалённое на одной стороне уходит, если на другой его с тех пор не трогали.
+// приростами обеих сторон. Задачи, походы и повторяющиеся задачи сливаются поштучно: добавленные
+// с обеих сторон остаются, удалённое на одной стороне уходит, если на другой его с тех пор не трогали.
 import { MANA_MAX } from './rules';
-import { settle } from './state';
-import type { Current, DayLog, Quest, State, Task } from './types';
+import { settle, tidyRoutines } from './state';
+import type { Current, DayLog, Quest, Routine, State, Task } from './types';
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 
@@ -84,7 +84,7 @@ function mergeById<T extends { id: string }>(base: T[], local: T[], remote: T[],
 
 const TASK_COUNTERS = ['spentMs'];
 const TASK_GROUPS = [
-  ['status', 'doneAt', 'doneDay', 'reward'],
+  ['status', 'doneAt', 'doneDay', 'reward', 'releasedAt', 'releasedFrom'],
   ['day', 'order'],
 ];
 const LOG_COUNTERS = ['gold', 'xp', 'done', 'workedMs', 'restMs', 'undeadSlain'];
@@ -149,12 +149,14 @@ export function mergeGames(base: State | null, local: State, remote: State, now:
   if (!base) {
     out.quests = unionById(l.quests, r.quests, localWins);
     out.tasks = unionById(l.tasks, r.tasks, localWins);
+    out.routines = unionById(l.routines, r.routines, localWins);
     out.log = {};
     for (const day of new Set([...Object.keys(l.log), ...Object.keys(r.log)])) {
       const a = l.log[day];
       const c = r.log[day];
       out.log[day] = a && c ? (localWins ? a : c) : clone((a ?? c)!);
     }
+    tidyRoutines(out);
     return out;
   }
 
@@ -166,6 +168,7 @@ export function mergeGames(base: State | null, local: State, remote: State, now:
   };
   out.quests = mergeById<Quest>(b.quests, l.quests, r.quests, (x, y, z) => mergeFields(x, y, z, localWins, []), localWins);
   out.tasks = mergeById<Task>(b.tasks, l.tasks, r.tasks, (x, y, z) => mergeFields(x, y, z, localWins, TASK_COUNTERS, TASK_GROUPS), localWins);
+  out.routines = mergeById<Routine>(b.routines, l.routines, r.routines, (x, y, z) => mergeFields(x, y, z, localWins, []), localWins);
   out.log = mergeLog(b.log, l.log, r.log, localWins);
   out.settings = mergeFields(b.settings, l.settings, r.settings, localWins, []);
   out.current = mergeCurrent(b.current, l.current, r.current, localWins);
@@ -177,10 +180,11 @@ export function mergeGames(base: State | null, local: State, remote: State, now:
   out.secondWindDay = pick(b.secondWindDay, l.secondWindDay, r.secondWindDay, localWins);
   // Таймер не может стоять на задаче, которой больше нет.
   if (out.current && !out.tasks.some((t) => t.id === out.current!.taskId)) out.current = null;
+  tidyRoutines(out);
   return out;
 }
 
 /** В игре ещё ничего не делали: такую можно молча заменить игрой из GitHub. */
 export function isPristine(s: State): boolean {
-  return s.tasks.length === 0 && s.hero.xp === 0 && s.hero.gold === 0;
+  return s.tasks.length === 0 && s.routines.length === 0 && s.hero.xp === 0 && s.hero.gold === 0;
 }

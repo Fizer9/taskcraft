@@ -1,6 +1,7 @@
 // Правила игры как функции над State. Функции меняют переданное состояние на месте,
 // поэтому store вызывает их на своей копии. DOM здесь нет, всё проверяется тестами.
 import {
+  DAY_STARTS_AT_HOUR,
   FORGOTTEN_AFTER,
   FROG_XP_MULT,
   GOLD_PER_LEVEL,
@@ -14,8 +15,8 @@ import {
   XP_BY_LEVEL,
   levelForEstimate,
 } from './rules';
-import { addDays, dayKey, daysBetween, shiftAt } from './time';
-import type { DayKey, DayLog, Level, Quest, QuestColor, QuestKind, Reward, Settings, State, Task } from './types';
+import { addDays, dayKey, daysBetween, parseDay, repeatsOn, shiftAt } from './time';
+import type { DayKey, DayLog, Level, Quest, QuestColor, QuestKind, Repeat, Reward, Routine, Settings, State, Task } from './types';
 
 export const DEFAULT_SETTINGS: Settings = {
   workStart: 9 * 60,
@@ -36,7 +37,7 @@ export function randomId(len = 8): string {
 
 export function newState(now: number): State {
   const s: State = {
-    v: 1,
+    v: 2,
     gameId: randomId(12),
     createdAt: now,
     touchedAt: null,
@@ -44,6 +45,7 @@ export function newState(now: number): State {
     hero: { xp: 0, gold: 0, mana: MANA_MAX },
     quests: [],
     tasks: [],
+    routines: [],
     current: null,
     breakSince: null,
     lastQuestId: null,
@@ -123,7 +125,10 @@ function accrueWork(s: State, taskId: string, dt: number, at: number): void {
   logOf(s, dayKey(at)).workedMs += dt;
 }
 
-/** Новый день: силы полны, план заново. Незакрытый вчера день переносит задачи сам. */
+/**
+ * Новый день: силы полны, план заново. Незакрытый вчера день переносит задачи сам,
+ * повторяющиеся задачи встают в план сами.
+ */
 function rollover(s: State, today: DayKey): void {
   for (const t of s.tasks) {
     if (t.status === 'open' && t.day !== null && t.day < today) t.day = today;
@@ -139,6 +144,7 @@ function rollover(s: State, today: DayKey): void {
     s.current.runningSince = null;
     s.current.idleSince = null;
   }
+  planRoutines(s);
 }
 
 /** Игрок заглянул в приложение: защита от забытого таймера отодвигается. */
@@ -163,12 +169,15 @@ export function updateQuest(s: State, id: string, patch: Partial<Pick<Quest, 'na
   if (q) Object.assign(q, patch);
 }
 
-/** Логово: сумма уровней всех задач похода, урон равен уровням сделанных. */
+/**
+ * Логово: сумма уровней всех задач похода, урон равен уровням сделанных. Повторяющиеся задачи
+ * не в счёт: они не кончаются, и поход из-за них никогда бы не завершился.
+ */
 export function lairOf(s: State, questId: string): { hp: number; max: number } {
   let hp = 0;
   let max = 0;
   for (const t of s.tasks) {
-    if (t.questId !== questId || t.status === 'released' || t.status === 'inbox') continue;
+    if (t.questId !== questId || t.status === 'released' || t.status === 'inbox' || t.routineId) continue;
     max += t.level;
     if (t.status === 'open') hp += t.level;
   }
@@ -184,13 +193,17 @@ export function winQuest(s: State, now: number, id: string): boolean {
   return true;
 }
 
-/** Убрать поход: его задачи возвращаются письмами к вестнику. */
+/**
+ * Убрать поход: его задачи возвращаются письмами к вестнику. Повторяющиеся задачи остаются
+ * без похода и приходят как прежде, а уже позванная на день остаётся в плане.
+ */
 export function removeQuest(s: State, id: string): void {
   s.quests = s.quests.filter((q) => q.id !== id);
+  for (const r of s.routines) if (r.questId === id) r.questId = null;
   for (const t of s.tasks) {
     if (t.questId === id) {
       t.questId = null;
-      if (t.status === 'open') t.status = 'inbox';
+      if (t.status === 'open' && !(t.routineId && t.day)) t.status = 'inbox';
     }
   }
 }
@@ -263,16 +276,138 @@ export function planTask(s: State, id: string, day: DayKey | null): void {
   if (t.status === 'inbox') t.status = 'open';
 }
 
-export function moveInPlan(s: State, id: string, dir: -1 | 1): void {
-  const t = findTask(s, id);
-  if (!t || !t.day) return;
-  const list = s.tasks.filter((x) => x.day === t.day && x.status !== 'released').sort((a, b) => a.order - b.order);
-  const i = list.indexOf(t);
-  const j = i + dir;
-  if (j < 0 || j >= list.length) return;
-  const o = list[j].order;
-  list[j].order = t.order;
-  t.order = o;
+// ---------- повторяющиеся задачи ----------
+
+export interface RoutineInput {
+  title: string;
+  questId: string | null;
+  level: Level;
+  estimateMin: number | null;
+  at: string | null;
+  repeat: Repeat;
+}
+
+export function findRoutine(s: State, id: string | null | undefined): Routine | undefined {
+  return id ? s.routines.find((r) => r.id === id) : undefined;
+}
+
+/** Задача, которую повторяющаяся прислала и которая ещё не сделана: такая всегда одна. */
+export function waitingOf(s: State, routineId: string): Task | undefined {
+  return s.tasks.find((t) => t.routineId === routineId && (t.status === 'open' || t.status === 'inbox'));
+}
+
+/**
+ * Новая повторяющаяся задача. fromTaskId: обычная задача становится повторяющейся и сама
+ * считается её первым приходом. Если сегодня её день, она сразу встаёт в план.
+ */
+export function addRoutine(s: State, now: number, input: RoutineInput, fromTaskId?: string): string {
+  const id = nextId(s, 'r');
+  s.routines.push({ id, ...input, title: input.title.trim() || 'Без названия', repeat: { ...input.repeat }, createdAt: now });
+  const t = fromTaskId ? findTask(s, fromTaskId) : undefined;
+  if (t && (t.status === 'open' || t.status === 'inbox')) {
+    t.routineId = id;
+    t.due = null;
+  }
+  planRoutines(s, id);
+  return id;
+}
+
+/** Правка повторяющейся: ждущая в отряде задача меняется вместе с ней. */
+export function updateRoutine(s: State, id: string, input: RoutineInput): void {
+  const r = findRoutine(s, id);
+  if (!r) return;
+  const moved = JSON.stringify(r.repeat) !== JSON.stringify(input.repeat);
+  Object.assign(r, input, { title: input.title.trim() || r.title, repeat: { ...input.repeat } });
+  const t = waitingOf(s, id);
+  if (t) {
+    Object.assign(t, { title: r.title, questId: r.questId, level: r.level, estimateMin: r.estimateMin, at: r.at });
+    if (t.status === 'inbox' && t.questId) t.status = 'open';
+  }
+  if (moved) planRoutines(s, id);
+}
+
+/** Больше не повторять. Ждущая задача остаётся в отряде обычной задачей. */
+export function stopRoutine(s: State, id: string): void {
+  s.routines = s.routines.filter((r) => r.id !== id);
+  const t = waitingOf(s, id);
+  if (t) delete t.routineId;
+}
+
+/**
+ * Повторяющиеся задачи, которым сегодня пора, встают в план. Если прошлая ещё не сделана,
+ * в план зовётся она, а новая не приходит. Сделанная или отпущенная сегодня второй раз
+ * за день не приходит. Id пришедшей задачи складывается из id повторяющейся и дня, поэтому
+ * телефон и компьютер, разбудившие её каждый у себя, получают одну и ту же задачу.
+ */
+export function planRoutines(s: State, only?: string): void {
+  if (s.closedDay === s.day) return;
+  const dayStart = parseDay(s.day).getTime() + DAY_STARTS_AT_HOUR * HOUR;
+  for (const r of s.routines) {
+    if ((only && r.id !== only) || !repeatsOn(r.repeat, s.day, s.settings)) continue;
+    const waiting = waitingOf(s, r.id);
+    if (waiting) {
+      if (waiting.day !== s.day) planTask(s, waiting.id, s.day);
+      continue;
+    }
+    const id = `${r.id}@${s.day}`;
+    if (findTask(s, id)) continue;
+    s.tasks.push({
+      id,
+      title: r.title,
+      questId: r.questId,
+      level: r.level,
+      estimateMin: r.estimateMin,
+      status: 'open',
+      day: s.day,
+      order: nextOrder(s, s.day),
+      due: null,
+      at: r.at,
+      spentMs: 0,
+      createdAt: Math.max(dayStart, r.createdAt),
+      routineId: r.id,
+    });
+  }
+}
+
+/**
+ * После слияния двух версий: у повторяющейся снова одна ждущая задача (лишние уходят,
+ * их время достаётся оставшейся), а задача, чьей повторяющейся больше нет, становится обычной.
+ */
+export function tidyRoutines(s: State): void {
+  const kept = new Map<string, Task>();
+  const drop = new Set<Task>();
+  const weight = (t: Task) => (s.current?.taskId === t.id ? 2 : 0) + (t.day === s.day ? 1 : 0);
+  for (const t of s.tasks) {
+    if (!t.routineId || (t.status !== 'open' && t.status !== 'inbox')) continue;
+    if (!findRoutine(s, t.routineId)) {
+      delete t.routineId;
+      continue;
+    }
+    const k = kept.get(t.routineId);
+    if (!k) {
+      kept.set(t.routineId, t);
+      continue;
+    }
+    const [stay, go] = weight(t) > weight(k) ? [t, k] : [k, t];
+    stay.spentMs += go.spentMs;
+    kept.set(t.routineId, stay);
+    drop.add(go);
+  }
+  if (drop.size === 0) return;
+  s.tasks = s.tasks.filter((t) => !drop.has(t));
+  if (s.frogId && !findTask(s, s.frogId)) s.frogId = null;
+  if (s.current && !findTask(s, s.current.taskId)) s.current = null;
+}
+
+/**
+ * Поменять местами две задачи одного дня. Кнопки «выше» и «ниже» меняют задачу с соседом, которого видно в списке:
+ * сделанные и вечерние задачи между ними не мешают.
+ */
+export function swapInPlan(s: State, a: string, b: string): void {
+  const x = findTask(s, a);
+  const y = findTask(s, b);
+  if (!x || !y || x === y || !x.day || x.day !== y.day) return;
+  [x.order, y.order] = [y.order, x.order];
 }
 
 /** Позвать к огню: таймер задачи пошёл. Задача из другого похода стоит маны. */
@@ -343,7 +478,7 @@ export function dismissIdle(s: State): void {
 export function rewardFor(s: State, t: Task, level: Level): Reward {
   const frog = s.frogId === t.id;
   const xp = XP_BY_LEVEL[level] * (frog ? FROG_XP_MULT : 1);
-  return { gold: GOLD_PER_LEVEL * level, xp, frog, damage: level };
+  return { gold: GOLD_PER_LEVEL * level, xp, frog, damage: t.routineId ? 0 : level };
 }
 
 export interface CompleteResult {
@@ -359,9 +494,10 @@ export function complete(s: State, now: number, id: string, level?: Level): Comp
   if (!t || t.status === 'done' || t.status === 'released') return null;
   if (level) t.level = level;
   if (t.status === 'inbox') t.status = 'open';
-  const lairBefore = t.questId ? lairOf(s, t.questId) : null;
+  const lairBefore = t.questId && !t.routineId ? lairOf(s, t.questId) : null;
   const undead = isUndead(t, s.day);
   const reward = rewardFor(s, t, t.level);
+  if (undead) reward.undead = true;
   t.status = 'done';
   t.doneAt = now;
   t.doneDay = s.day;
@@ -376,7 +512,7 @@ export function complete(s: State, now: number, id: string, level?: Level): Comp
   if (reward.frog) l.frog = true;
   if (undead) l.undeadSlain += 1;
   if (s.current?.taskId === id) s.current = null;
-  const lairAfter = t.questId ? lairOf(s, t.questId) : null;
+  const lairAfter = lairBefore && t.questId ? lairOf(s, t.questId) : null;
   return {
     reward,
     lair: lairBefore && lairAfter ? { before: lairBefore.hp, after: lairAfter.hp, max: lairAfter.max } : null,
@@ -384,14 +520,36 @@ export function complete(s: State, now: number, id: string, level?: Level): Comp
   };
 }
 
-/** Отпустить: задача уходит без награды и без штрафа. */
+/** Отпустить: задача уходит без награды и без штрафа. Её можно вернуть (unrelease). */
 export function release(s: State, now: number, id: string): void {
   settle(s, now);
   const t = findTask(s, id);
-  if (!t) return;
+  if (!t || t.status === 'done' || t.status === 'released') return;
+  t.releasedFrom = t.status;
+  t.releasedAt = now;
   t.status = 'released';
   if (s.current?.taskId === id) s.current = null;
   if (s.frogId === id) s.frogId = null;
+}
+
+/**
+ * Вернуть отпущенную задачу туда, откуда её отпустили. Если её звали на уже прошедший день,
+ * она ждёт в отряде. frog: вернуть ей и звание лягушки дня, если его никто не занял.
+ */
+export function unrelease(s: State, id: string, frog = false): void {
+  const t = findTask(s, id);
+  if (!t || t.status !== 'released') return;
+  t.status = t.releasedFrom ?? 'open';
+  delete t.releasedFrom;
+  delete t.releasedAt;
+  if (t.day && t.day < s.day) t.day = null;
+  if (!t.questId && !t.day) t.status = 'inbox';
+  if (frog && !s.frogId && t.day === s.day) s.frogId = id;
+}
+
+/** Отпущенные задачи, недавние сверху. */
+export function releasedOf(s: State): Task[] {
+  return s.tasks.filter((t) => t.status === 'released').sort((a, b) => (b.releasedAt ?? b.createdAt) - (a.releasedAt ?? a.createdAt));
 }
 
 /** Вернуть сделанную задачу назад (если нажал «Готово» по ошибке). */
@@ -404,6 +562,9 @@ export function undoComplete(s: State, id: string): void {
   l.gold -= t.reward.gold;
   l.xp -= t.reward.xp;
   l.done -= 1;
+  if (t.reward.undead) l.undeadSlain = Math.max(0, l.undeadSlain - 1);
+  // Лягушка дня съедена, только если в тот день осталась другая сделанная лягушка.
+  if (t.reward.frog) l.frog = s.tasks.some((x) => x !== t && x.status === 'done' && x.doneDay === t.doneDay && x.reward?.frog);
   t.status = 'open';
   delete t.doneAt;
   delete t.doneDay;

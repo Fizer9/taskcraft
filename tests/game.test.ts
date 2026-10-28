@@ -9,20 +9,23 @@ import {
   lairOf,
   lightFire,
   newState,
+  planOf,
   planTask,
   release,
   secondWind,
   setFrog,
   settle,
   start,
+  swapInPlan,
   toggleBreak,
   touch,
   undoComplete,
+  unrelease,
   winQuest,
 } from '../src/game/state';
-import { addDays, dayKey, shiftAt } from '../src/game/time';
+import { addDays, dayKey, scheduleError, shiftAt } from '../src/game/time';
 import { assignSeats, campView } from '../src/game/view';
-import { Store, type Storage } from '../src/game/store';
+import { SAVE_VERSION, Store, type Storage } from '../src/game/store';
 
 // Пятница, 23 октября 2026.
 const at = (h: number, m = 0, d = 23) => new Date(2026, 9, d, h, m).getTime();
@@ -47,6 +50,16 @@ describe('время и смены', () => {
     expect(shiftAt(at(22, 40), s.settings)).toBe('night');
     expect(shiftAt(at(14, 0, 24), s.settings)).toBe('weekend');
     expect(shiftAt(at(1, 0, 24), s.settings)).toBe('night');
+  });
+
+  it('распорядок, в котором путаются смены, не принимается', () => {
+    const { s } = fresh();
+    expect(scheduleError(s.settings)).toBeNull();
+    expect(scheduleError({ ...s.settings, workStart: 3 * 60 })).toMatch('не раньше 4:00');
+    expect(scheduleError({ ...s.settings, workStart: 18 * 60, workEnd: 9 * 60 })).toMatch('позже начала');
+    expect(scheduleError({ ...s.settings, workEnd: 22 * 60, bedtime: 22 * 60 + 15 })).toMatch('Отбой');
+    // Отбой после полуночи допустим: он ещё в том же игровом дне.
+    expect(scheduleError({ ...s.settings, bedtime: 60 })).toBeNull();
   });
 });
 
@@ -143,6 +156,58 @@ describe('награды', () => {
     expect(s.tasks[0].status).toBe('open');
   });
 
+  it('отмена «Готово» снимает съеденную лягушку и упокоенную нежить', () => {
+    const { s, work } = fresh();
+    const frog = addTask(s, at(8), { title: 'Лягушка', questId: work, level: 3, day: s.day });
+    const old = addTask(s, at(8), { title: 'Просрочка', questId: work, due: '2026-10-21' });
+    setFrog(s, frog);
+    complete(s, at(10), frog);
+    complete(s, at(11), old);
+    expect(s.log[s.day].frog).toBe(true);
+    expect(s.log[s.day].undeadSlain).toBe(1);
+    undoComplete(s, frog);
+    undoComplete(s, old);
+    expect(s.log[s.day].frog).toBe(false);
+    expect(s.log[s.day].undeadSlain).toBe(0);
+    expect(s.frogId).toBe(frog);
+  });
+
+  it('отпущенную задачу можно вернуть туда, откуда отпустили', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    const letter = addTask(s, at(8), { title: 'Письмо', questId: null });
+    setFrog(s, a);
+    release(s, at(9), a);
+    release(s, at(9), letter);
+    expect(s.frogId).toBeNull();
+    unrelease(s, a, true);
+    unrelease(s, letter);
+    const [ta, tl] = s.tasks;
+    expect(ta.status).toBe('open');
+    expect(ta.day).toBe(s.day);
+    expect(s.frogId).toBe(a);
+    expect(ta.releasedAt).toBeUndefined();
+    expect(tl.status).toBe('inbox');
+  });
+
+  it('задача, отпущенная из плана прошедшего дня, возвращается в отряд', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    release(s, at(9), a);
+    s.day = addDays(s.day, 2);
+    unrelease(s, a);
+    expect(s.tasks[0].status).toBe('open');
+    expect(s.tasks[0].day).toBeNull();
+  });
+
+  it('сделанную задачу отпустить нельзя', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    complete(s, at(9), a);
+    release(s, at(10), a);
+    expect(s.tasks[0].status).toBe('done');
+  });
+
   it('логово падает, когда задач не осталось', () => {
     const { s, work } = fresh();
     const a = addTask(s, at(8), { title: 'A', questId: work, level: 2 });
@@ -227,6 +292,20 @@ describe('экран дня', () => {
     expect(v.doneToday).toBe(1);
   });
 
+  it('«выше» и «ниже» двигают задачу через видимого соседа, а не через сделанную', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'Отчёт', questId: work, day: s.day });
+    const b = addTask(s, at(8), { title: 'Почта', questId: work, day: s.day });
+    const c = addTask(s, at(8), { title: 'Созвон', questId: work, day: s.day });
+    complete(s, at(9), b);
+    swapInPlan(s, a, c);
+    expect(planOf(s).filter((t) => t.status === 'open').map((t) => t.title)).toEqual(['Созвон', 'Отчёт']);
+    // Задачи разных дней местами не меняются.
+    const d = addTask(s, at(8), { title: 'Завтра', questId: work, day: '2026-10-24' });
+    swapInPlan(s, c, d);
+    expect(planOf(s).filter((t) => t.status === 'open').map((t) => t.title)).toEqual(['Созвон', 'Отчёт']);
+  });
+
   it('места у костра не меняются, когда соседи уходят', () => {
     const { s, work } = fresh();
     const ids = [1, 2, 3, 4].map((i) => addTask(s, at(8) + i, { title: `T${i}`, questId: work, day: s.day }));
@@ -264,10 +343,99 @@ describe('экран дня', () => {
 describe('хранилище', () => {
   it('сохраняет и читает состояние', () => {
     let saved: string | null = null;
-    const storage: Storage = { load: () => saved, save: (j) => (saved = j) };
+    const storage: Storage = { load: () => saved, save: (j) => { saved = j; } };
     const a = new Store(storage, () => at(9));
     a.act((s, now) => addTask(s, now, { title: 'A', questId: s.quests[0].id, day: s.day }));
     const b = new Store(storage, () => at(9, 30));
     expect(b.state.tasks).toHaveLength(1);
+  });
+
+  /** Хранилище в памяти, которое помнит всё, что в него писали. */
+  function memory(raw: string | null) {
+    const m = { raw, writes: 0, backup: null as string | null };
+    const storage: Storage = {
+      load: () => m.raw,
+      save: (j) => {
+        m.raw = j;
+        m.writes += 1;
+      },
+      backup: (r) => {
+        m.backup = r;
+      },
+    };
+    return { m, storage };
+  }
+
+  it('нечитаемое сохранение не затирается, пока игрок не решит', () => {
+    const { m, storage } = memory('{"v":1,"tasks":[{"id"');
+    const st = new Store(storage, () => at(9));
+    expect(st.problem?.kind).toBe('broken');
+    expect(m.backup).toBe('{"v":1,"tasks":[{"id"');
+    st.tick();
+    st.wake();
+    expect(m.writes).toBe(0);
+    expect(m.raw).toBe('{"v":1,"tasks":[{"id"');
+    st.startOver();
+    expect(st.problem).toBeNull();
+    expect(m.writes).toBe(1);
+    expect(JSON.parse(m.raw!).v).toBe(SAVE_VERSION);
+  });
+
+  it('сохранение из новой версии игры узнаётся и тоже не затирается', () => {
+    const { s } = fresh();
+    const newer = JSON.stringify({ ...s, v: SAVE_VERSION + 1 });
+    const { m, storage } = memory(newer);
+    const st = new Store(storage, () => at(9));
+    expect(st.problem?.kind).toBe('newer');
+    expect(m.writes).toBe(0);
+  });
+
+  it('браузер не дал записать: игра об этом знает', () => {
+    let full = false;
+    const storage: Storage = { load: () => null, save: () => !full };
+    const st = new Store(storage, () => at(9));
+    expect(st.saveOk).toBe(true);
+    full = true;
+    st.act((s, now) => addTask(s, now, { title: 'A', questId: s.quests[0].id, day: s.day }));
+    expect(st.saveOk).toBe(false);
+    full = false;
+    st.act((s, now) => addTask(s, now, { title: 'B', questId: s.quests[0].id, day: s.day }));
+    expect(st.saveOk).toBe(true);
+  });
+
+  it('стёртая игра больше ничего не пишет до перезагрузки', () => {
+    const { m, storage } = memory(null);
+    let cleared = 0;
+    storage.clear = () => {
+      m.raw = null;
+      cleared += 1;
+    };
+    const st = new Store(storage, () => at(9));
+    st.act((s, now) => addTask(s, now, { title: 'A', questId: s.quests[0].id, day: s.day }));
+    const writes = m.writes;
+    st.wipe();
+    st.tick();
+    st.wake();
+    st.persist();
+    expect(cleared).toBe(1);
+    expect(m.raw).toBeNull();
+    expect(m.writes).toBe(writes);
+  });
+
+  it('действие, упавшее с ошибкой, не оставляет игру наполовину изменённой', () => {
+    const { m, storage } = memory(null);
+    const st = new Store(storage, () => at(9));
+    st.act((s, now) => addTask(s, now, { title: 'A', questId: s.quests[0].id, day: s.day }));
+    const before = m.raw;
+    expect(() =>
+      st.act((s, now) => {
+        addTask(s, now, { title: 'B', questId: s.quests[0].id, day: s.day });
+        s.hero.gold += 100;
+        throw new Error('сбой правила');
+      }),
+    ).toThrow('сбой правила');
+    expect(st.state.tasks.map((t) => t.title)).toEqual(['A']);
+    expect(st.state.hero.gold).toBe(JSON.parse(before!).hero.gold);
+    expect(m.raw).toBe(before);
   });
 });

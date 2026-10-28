@@ -28,6 +28,8 @@ export interface Reward {
   gold: number;
   xp: number;
   frog: boolean;
+  /** Задача была нежитью: при отмене «Готово» счёт упокоенных за день уменьшается. */
+  undead?: boolean;
   /** Урон логову похода, равен уровню задачи. */
   damage: number;
 }
@@ -53,6 +55,29 @@ export interface Task {
   doneAt?: number;
   doneDay?: DayKey;
   reward?: Reward;
+  /** Когда отпустили и откуда: по этому задачу можно вернуть. */
+  releasedAt?: number;
+  releasedFrom?: 'open' | 'inbox';
+  /** Задача пришла сама от повторяющейся задачи с этим id. */
+  routineId?: string;
+}
+
+/** Как часто приходит повторяющаяся задача. Рабочие дни берутся из распорядка, weekday: 0 воскресенье. */
+export type Repeat = { every: 'day' } | { every: 'workday' } | { every: 'week'; weekday: number };
+
+/**
+ * Повторяющаяся задача: в свои дни она сама встаёт в план дня обычной задачей (Task с routineId).
+ * Пока прошлая не сделана, новая не приходит: в отряде ждёт одна.
+ */
+export interface Routine {
+  id: string;
+  title: string;
+  questId: string | null;
+  level: Level;
+  estimateMin: number | null;
+  at: string | null;
+  repeat: Repeat;
+  createdAt: number;
 }
 
 export interface Settings {
@@ -91,7 +116,7 @@ export interface Hero {
 }
 
 export interface State {
-  v: 1;
+  v: 2;
   /** Своя у каждой игры: по ней сохранение в GitHub узнаёт, та же это игра или другая. */
   gameId: string;
   createdAt: number;
@@ -101,6 +126,7 @@ export interface State {
   hero: Hero;
   quests: Quest[];
   tasks: Task[];
+  routines: Routine[];
   current: Current | null;
   breakSince: number | null;
   /** Поход последней задачи у огня, для цены переключения. */

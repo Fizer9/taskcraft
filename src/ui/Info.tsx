@@ -1,0 +1,189 @@
+// Справка: правила игры и «О приложении» (где игра хранится, версия, авторы и лицензии).
+import {
+  DAY_STARTS_AT_HOUR,
+  FORGOTTEN_AFTER,
+  GOLD_PER_LEVEL,
+  MANA_DRAIN_PER_HOUR,
+  MANA_MAX,
+  MANA_REST_PER_HOUR,
+  MINUTE,
+  PLAN_XP_PER_TASK,
+  SECOND_WIND,
+  SUMMARY_BEFORE_BED,
+  SWITCH_COST,
+  XP_BY_LEVEL,
+} from '../game/rules';
+import { LEVEL_HINT } from '../game/words';
+import { BUILD, VERSION } from '../version';
+import type { Ui } from './App';
+import { GIcon, LIcon } from './Icon';
+import type { GameIcon } from './icons';
+import { Sheet } from './Sheets';
+
+/** Правила пересказывают числа из rules.ts, поэтому не расходятся с игрой. */
+const RULES: { icon: GameIcon | 'repeat'; title: string; text: string }[] = [
+  {
+    icon: 'campfire',
+    title: 'Спутники',
+    text: `Каждая задача становится спутником одного из четырёх классов, по размеру: I разбойник (${LEVEL_HINT[1]}), II варвар (${LEVEL_HINT[2]}), III маг (${LEVEL_HINT[3]}), IV рыцарь (${LEVEL_HINT[4]}). Класс подбирается по оценке времени, его можно поправить при сдаче.`,
+  },
+  {
+    icon: 'sunrise',
+    title: 'Утро',
+    text: `На экране «План» собираешь отряд на день и разжигаешь костёр: +${PLAN_XP_PER_TASK} опыта за каждого позванного. Лягушкой дня выбирают самую тяжёлую задачу: опыт за неё удваивается, а начать день лучше с неё.`,
+  },
+  {
+    icon: 'check',
+    title: 'День',
+    text: `Позванный к огню спутник работает, таймер идёт в задачу. «Готово» даёт ${GOLD_PER_LEVEL} золота за уровень и опыт (${XP_BY_LEVEL[1]}, ${XP_BY_LEVEL[2]}, ${XP_BY_LEVEL[3]}, ${XP_BY_LEVEL[4]} по уровням), а логову похода урон, равный уровню. Когда в походе не остаётся открытых задач, логово падает, и поход можно отправить в зал трофеев.`,
+  },
+  {
+    icon: 'heart',
+    title: 'Мана',
+    text: `Мана показывает силы героя. Утром её ${MANA_MAX}. Работа тратит ${MANA_DRAIN_PER_HOUR} в час, привал возвращает ${MANA_REST_PER_HOUR} в час, задача из другого похода стоит ${SWITCH_COST}. Вечером или в выходной, если сегодня уже была работа, раз в день можно взять второе дыхание: +${SECOND_WIND}.`,
+  },
+  {
+    icon: 'sun',
+    title: 'Смены',
+    text: `Утро, рабочий день, вечер, выходной и ночь (за ${SUMMARY_BEFORE_BED / MINUTE} минут до отбоя). Днём на первом месте рабочие походы, вечером и в выходной личные. Распорядок меняется в Летописи.`,
+  },
+  {
+    icon: 'skull',
+    title: 'Нежить',
+    text: 'Просроченная задача встаёт нежитью на лесной дороге: скелет-миньон с первого дня, разбойник с третьего, воин с седьмого, маг с четырнадцатого. «Упокоить» значит сделать её.',
+  },
+  {
+    icon: 'scroll',
+    title: 'Вестник',
+    text: 'Задача без похода и без дня приходит к вестнику письмом. В сборе отряда письма разбирают: задаче выбирают поход и зовут её на сегодня или в отряд, а ненужные письма отпускают.',
+  },
+  {
+    icon: 'repeat',
+    title: 'Повторяющиеся задачи',
+    text: 'Задача может повторяться каждый день, по рабочим дням из распорядка или раз в неделю. В свои дни она сама встаёт в план. Пока прошлая не сделана, новая не приходит, а отпущенная вернётся в следующий свой день. Золото и опыт за неё как за обычную, но логово похода она не ранит: повторяющиеся задачи не кончаются.',
+  },
+  {
+    icon: 'logs',
+    title: 'Отпустить',
+    text: 'Задача уходит без награды и без штрафа. Сразу после этого её можно вернуть кнопкой «Вернуть» внизу экрана, позже в Королевстве, в списке «Отпущенные».',
+  },
+  {
+    icon: 'hourglass',
+    title: 'Забытый таймер',
+    text: `Если ${FORGOTTEN_AFTER / MINUTE} минут не заглядывать в игру, таймер встанет сам и спросит, шла ли работа.`,
+  },
+  {
+    icon: 'zzz',
+    title: 'Отбой',
+    text: `Перед отбоем лагерь подводит итоги дня: отмеченные задачи остаются у костра на завтра, остальные возвращаются в отряд. Игровой день начинается в ${DAY_STARTS_AT_HOUR} утра, поэтому работа после полуночи идёт в тот же день.`,
+  },
+];
+
+export function RulesSheet({ ui }: { ui: Ui }) {
+  return (
+    <Sheet
+      title="Правила"
+      onClose={ui.close}
+      footer={
+        <div class="btns btns-one">
+          <button class="btn btn-ghost" onClick={() => ui.showIntro()}>
+            Показать знакомство снова
+          </button>
+        </div>
+      }
+    >
+      {RULES.map((r) => (
+        <div key={r.title} class="rule">
+          {r.icon === 'repeat' ? <LIcon name="repeat" size={20} class="ic-gold" /> : <GIcon name={r.icon} size={20} class="ic-gold" />}
+          <div>
+            <div class="rule-title">{r.title}</div>
+            <p class="note">{r.text}</p>
+          </div>
+        </div>
+      ))}
+    </Sheet>
+  );
+}
+
+const LOCK_KEY = 'taskcraft-lager-key';
+
+function lockRemembered(): boolean {
+  try {
+    return !!localStorage.getItem(LOCK_KEY);
+  } catch {
+    return false;
+  }
+}
+
+function forgetLock(): void {
+  if (!confirm('Забыть пароль на этом устройстве? При следующем открытии сайт спросит его снова. Игра останется на месте.')) return;
+  try {
+    localStorage.removeItem(LOCK_KEY);
+    sessionStorage.removeItem(LOCK_KEY);
+  } catch {
+    // Нечего забывать.
+  }
+  location.reload();
+}
+
+const link = (href: string, text: string) => (
+  <a href={href} target="_blank" rel="noopener noreferrer">
+    {text}
+  </a>
+);
+
+export function AboutSheet({ ui }: { ui: Ui }) {
+  return (
+    <Sheet title="О приложении" onClose={ui.close}>
+      <p class="note">
+        Лагерь у костра, версия {VERSION} от {BUILD}. Это закрытая бета: что-то может работать не так, как задумано.
+      </p>
+
+      <div class="rule-title">Где хранится игра</div>
+      <p class="note">
+        Игра живёт в этом браузере. Своего сервера у Лагеря нет, и никуда, кроме твоего GitHub, игра не уходит. Если подключить GitHub, копия лежит в
+        секретном гисте твоего аккаунта: в поиске и в профиле его не видно, но открыть его может любой, у кого есть ссылка на него.
+      </p>
+      <p class="note">
+        Браузер может стереть данные сайта, если почистить историю или долго не заходить (Safari стирает через неделю без визитов, если Лагерь не добавлен на
+        экран «Домой»). Поэтому подключи GitHub или время от времени сохраняй копию в файл.
+      </p>
+
+      <div class="rule-title">Вопросы и ошибки</div>
+      <p class="note">
+        Пиши тому, кто дал тебе ссылку на Лагерь. Если что-то сломалось, на экране ошибки есть кнопка «Скопировать отчёт»: в отчёте версия, браузер и
+        текст ошибки, а самой игры и токена в нём нет.
+      </p>
+
+      {lockRemembered() && (
+        <>
+          <div class="rule-title">Пароль сайта</div>
+          <p class="note">Пароль запомнен на этом устройстве, поэтому сайт его не спрашивает.</p>
+          <div class="btns btns-one">
+            <button class="btn btn-ghost btn-sm" onClick={forgetLock}>
+              Забыть пароль на этом устройстве
+            </button>
+          </div>
+        </>
+      )}
+
+      <div class="rule-title">Авторы и лицензии</div>
+      <ul class="credits-list note">
+        <li>
+          Модели лагеря: {link('https://kaylousberg.com/game-assets', 'KayKit')} (Kay Lousberg), лицензия CC0.
+        </li>
+        <li>
+          Иконки с {link('https://game-icons.net', 'game-icons.net')}: Lorc (солнце, лягушка, песочные часы, костёр, замок, свиток, рассвет), Delapouite
+          (монеты, галочка, сон, бревно, закат), Sbed (череп), Zeromancer (сердце). Лицензия{' '}
+          {link('https://creativecommons.org/licenses/by/3.0/', 'CC BY 3.0')}, {link('./licenses/game-icons.txt', 'список со ссылками')}.
+        </li>
+        <li>
+          Шрифты Alegreya, Alegreya SC и Alegreya Sans: Juan Pablo del Peral, Huerta Tipográfica. Лицензия SIL Open Font License 1.1 (
+          {link('./licenses/alegreya.txt', 'Alegreya')}, {link('./licenses/alegreya-sc.txt', 'Alegreya SC')},{' '}
+          {link('./licenses/alegreya-sans.txt', 'Alegreya Sans')}).
+        </li>
+        <li>Интерфейс на {link('./licenses/preact.txt', 'Preact')} (Jason Miller), лицензия MIT.</li>
+      </ul>
+    </Sheet>
+  );
+}

@@ -20,12 +20,17 @@ interface Figure {
   zz?: boolean;
 }
 
+/** Номер над фигурой: 28 px, а нажать можно в круге 44 px, если соседний номер не слишком близко. */
+const BADGE = 28;
+const BADGE_HIT = 8;
+
 export function Scene(p: {
   view: CampView;
   timer: string | null;
   onTask: (id: string) => void;
   onLetters: () => void;
-  onMore: () => void;
+  /** Сколько пикселей экрана в единице сцены; пока размер неизвестен, не задан. */
+  unit?: number;
 }) {
   const { view: v } = p;
   const figures: Figure[] = [];
@@ -42,7 +47,7 @@ export function Scene(p: {
       n: v.numbers.get(v.ring.task.id) ?? 0,
       tone: 'current',
       pulse: v.ring.pose === 'work',
-      extra: p.timer && v.ring.pose !== 'cheer' ? <span class="tag tag-timer">{p.timer}</span> : null,
+      extra: p.timer && v.ring.pose !== 'cheer' ? <span class="tag tag-timer" aria-hidden="true">{p.timer}</span> : null,
     });
   }
   for (const f of v.seats) {
@@ -109,15 +114,8 @@ export function Scene(p: {
         <SpriteImg key={l.key} s={l.sprite} undead={l.f?.tone === 'undead'} />
       ))}
       {sorted.map((f) => (
-        <FigureBadge key={`b-${f.key}`} f={f} onTask={p.onTask} />
+        <FigureBadge key={`b-${f.key}`} f={f} hit={hitOf(f, sorted, p.unit)} onTask={p.onTask} />
       ))}
-      {(v.extraSeated > 0 || v.extraRoad > 0) && (
-        <button class="scene-more" style={{ left: pct(fire[0], SCENE_W), top: pct(fire[1] + 150, SCENE_H) }} onClick={p.onMore}>
-          {v.extraSeated > 0 && `ещё ${v.extraSeated} у костра`}
-          {v.extraSeated > 0 && v.extraRoad > 0 && ' · '}
-          {v.extraRoad > 0 && `ещё ${v.extraRoad} на дороге`}
-        </button>
-      )}
       {v.inbox > 0 && (
         <button
           class="scene-letters"
@@ -155,26 +153,44 @@ function FigureFallback({ f }: { f: Figure }) {
   return <span class={`fig-fallback fig-${f.fallback}`} style={{ left: pct(x, SCENE_W), top: pct(y, SCENE_H) }} />;
 }
 
-function FigureBadge({ f, onTask }: { f: Figure; onTask: (id: string) => void }) {
-  let x: number;
-  let y: number;
-  if (f.sprite?.head) {
-    [x, y] = f.sprite.head;
-    y -= 4;
-  } else if (f.sprite) {
-    x = f.sprite.x + f.sprite.w / 2;
-    y = f.sprite.y + 6;
-  } else {
-    [x, y] = SCENE.spots[f.spot] ?? [0, 0];
-    y -= 40;
+/** Где над фигурой стоит её номер, в единицах сцены. */
+function badgeAt(f: Figure): [number, number] {
+  if (f.sprite?.head) return [f.sprite.head[0], f.sprite.head[1] - 4];
+  if (f.sprite) return [f.sprite.x + f.sprite.w / 2, f.sprite.y + 6];
+  const [x, y] = SCENE.spots[f.spot] ?? [0, 0];
+  return [x, y - 40];
+}
+
+/**
+ * На сколько пикселей невидимая зона нажатия выходит за номер. Соседние номера на маленьком экране
+ * стоят тесно, и зона одного не должна накрывать другой: каждому достаётся половина просвета между ними.
+ */
+function hitOf(f: Figure, all: Figure[], unit: number | undefined): number {
+  if (!unit || f.n === 0) return BADGE_HIT;
+  const [x, y] = badgeAt(f);
+  let gap = Infinity;
+  for (const o of all) {
+    if (o === f || o.n === 0) continue;
+    const [ox, oy] = badgeAt(o);
+    gap = Math.min(gap, Math.hypot(x - ox, y - oy) * unit - BADGE);
   }
+  return Math.max(0, Math.min(BADGE_HIT, gap / 2));
+}
+
+function FigureBadge({ f, hit, onTask }: { f: Figure; hit: number; onTask: (id: string) => void }) {
+  const [x, y] = badgeAt(f);
   return (
     <div
       class={`fig-mark${f.n > 0 ? '' : ' fig-mark-free'}${x > SCENE_W * 0.62 ? ' fig-mark-left' : ''}`}
       style={{ left: pct(x, SCENE_W), top: pct(y, SCENE_H) }}
     >
       {f.n > 0 && (
-        <button class={`num num-${f.tone}${f.pulse ? ' is-pulse' : ''}`} aria-label={f.label} onClick={() => onTask(f.task.id)}>
+        <button
+          class={`num num-${f.tone}${f.pulse ? ' is-pulse' : ''}`}
+          style={hit < BADGE_HIT ? { '--hit': `${hit}px` } : undefined}
+          aria-label={`${f.n}. ${f.label}`}
+          onClick={() => onTask(f.task.id)}
+        >
           {f.n}
         </button>
       )}

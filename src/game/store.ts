@@ -7,9 +7,28 @@ const SAVE_EVERY_MS = 15_000;
 
 type Listener = () => void;
 
+/** Версия формата сохранения. Растёт, когда меняется устройство State. */
+export const SAVE_VERSION = 2;
+
+/**
+ * Переходы между версиями: MIGRATIONS[n] переводит сохранение версии n в версию n + 1.
+ * Когда меняется State, SAVE_VERSION растёт на один, а сюда добавляется переход.
+ */
+const MIGRATIONS: Record<number, (s: Record<string, unknown>) => void> = {
+  // 0.3.0: повторяющиеся задачи.
+  1: (s) => {
+    s.routines = [];
+  },
+};
+
 export interface Storage {
   load(): string | null;
-  save(json: string): void;
+  /** false, если браузер не дал записать (приватный режим, нет места). */
+  save(json: string): boolean | void;
+  /** Отложить нечитаемое сохранение в сторону, прежде чем игра пойдёт дальше. */
+  backup?(raw: string): void;
+  /** Стереть игру и отложенное сохранение. */
+  clear?(): void;
 }
 
 export const browserStorage: Storage = {
@@ -23,11 +42,33 @@ export const browserStorage: Storage = {
   save(json) {
     try {
       localStorage.setItem(KEY, json);
+      return true;
     } catch {
-      // Хранилище недоступно (приватный режим): игра идёт без сохранения.
+      return false;
+    }
+  },
+  backup(raw) {
+    try {
+      localStorage.setItem(`${KEY}.broken`, raw);
+    } catch {
+      // Места нет: сохранение всё равно не затирается, пока игрок не выберет, что делать.
+    }
+  },
+  clear() {
+    try {
+      localStorage.removeItem(KEY);
+      localStorage.removeItem(`${KEY}.broken`);
+    } catch {
+      // Хранилище недоступно: стирать нечего.
     }
   },
 };
+
+/** Почему сохранение из браузера не открылось. Пока игрок не решил, поверх него ничего не пишется. */
+export interface SaveProblem {
+  kind: 'broken' | 'newer';
+  raw: string;
+}
 
 export function parseSave(json: string): State | null {
   try {
@@ -37,12 +78,30 @@ export function parseSave(json: string): State | null {
   }
 }
 
-/** Проверяет, что это сохранение Лагеря, и дописывает поля, которых не было в ранних версиях. */
+/** Сохранение записано более новой версией игры, чем эта. */
+export function isNewerSave(json: string): boolean {
+  try {
+    const v = (JSON.parse(json) as { v?: unknown; state?: { v?: unknown } } | null)?.v;
+    return typeof v === 'number' && v > SAVE_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+/** Проверяет, что это сохранение Лагеря, доводит старую версию до нынешней и дописывает недостающие поля. */
 export function checkSave(raw: unknown): State | null {
   const s = raw as State | null;
-  if (!s || typeof s !== 'object' || s.v !== 1 || !Array.isArray(s.tasks) || !Array.isArray(s.quests)) return null;
+  if (!s || typeof s !== 'object' || typeof s.v !== 'number' || !Array.isArray(s.tasks) || !Array.isArray(s.quests)) return null;
+  if (s.v > SAVE_VERSION || s.v < 1) return null;
+  while (s.v < SAVE_VERSION) {
+    const step = MIGRATIONS[s.v];
+    if (!step) return null;
+    step(s as unknown as Record<string, unknown>);
+    (s as { v: number }).v += 1;
+  }
   s.gameId ??= randomId(12);
   s.touchedAt ??= null;
+  if (!Array.isArray(s.routines)) s.routines = [];
   return s;
 }
 
@@ -51,6 +110,14 @@ export class Store {
   private listeners = new Set<Listener>();
   private actionListeners = new Set<Listener>();
   private lastSave = 0;
+  /** Последнее записанное состояние: к нему игра откатывается, если действие упало на полпути. */
+  private saved = '';
+  /** Сохранение из браузера не открылось; пока это так, игра в браузер не пишется. */
+  problem: SaveProblem | null = null;
+  /** Последняя запись в браузер удалась. */
+  saveOk = true;
+  /** Игру стёрли: до перезагрузки страницы она больше ничего не пишет. */
+  private wiped = false;
 
   constructor(
     private storage: Storage = browserStorage,
@@ -58,9 +125,22 @@ export class Store {
   ) {
     const raw = storage.load();
     const now = clock();
-    this.state = (raw && parseSave(raw)) || newState(now);
+    const loaded = raw ? parseSave(raw) : null;
+    if (raw && !loaded) {
+      this.problem = { kind: isNewerSave(raw) ? 'newer' : 'broken', raw };
+      storage.backup?.(raw);
+    }
+    this.state = loaded || newState(now);
     settle(this.state, now);
     this.persist();
+  }
+
+  /** Игрок решил начать заново: нечитаемое сохранение остаётся отложенным, новая игра пишется. */
+  startOver(): void {
+    this.problem = null;
+    this.state = newState(this.clock());
+    this.persist();
+    this.emit();
   }
 
   now(): number {
@@ -78,13 +158,22 @@ export class Store {
     return () => this.actionListeners.delete(fn);
   }
 
-  /** Любое действие игрока: начисляем время, применяем правило, сохраняем. */
+  /**
+   * Любое действие игрока: начисляем время, применяем правило, сохраняем. Если правило упало
+   * с ошибкой, недоделанное действие не сохраняется: игра возвращается к последней записи.
+   */
   act<R>(fn: (s: State, now: number) => R): R {
     const now = this.clock();
-    settle(this.state, now);
-    touch(this.state, now);
-    this.state.touchedAt = now;
-    const r = fn(this.state, now);
+    let r: R;
+    try {
+      settle(this.state, now);
+      touch(this.state, now);
+      this.state.touchedAt = now;
+      r = fn(this.state, now);
+    } catch (e) {
+      if (this.saved) this.state = JSON.parse(this.saved) as State;
+      throw e;
+    }
     this.persist();
     for (const l of this.actionListeners) l();
     this.emit();
@@ -110,6 +199,7 @@ export class Store {
   }
 
   replace(next: State): void {
+    this.problem = null;
     this.state = next;
     settle(this.state, this.clock());
     this.persist();
@@ -120,9 +210,21 @@ export class Store {
     return JSON.stringify(this.state, null, 1);
   }
 
+  /** «Стереть всё»: игра уходит из браузера. Страницу после этого перезагружают. */
+  wipe(): void {
+    this.wiped = true;
+    this.storage.clear?.();
+  }
+
   persist(): void {
+    if (this.problem || this.wiped) return;
     this.lastSave = this.clock();
-    this.storage.save(JSON.stringify(this.state));
+    this.saved = JSON.stringify(this.state);
+    const ok = this.storage.save(this.saved) !== false;
+    if (ok !== this.saveOk) {
+      this.saveOk = ok;
+      this.emit();
+    }
   }
 
   private emit(): void {

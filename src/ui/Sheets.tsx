@@ -1,12 +1,14 @@
 // Листы поверх экрана: новая задача, карточка задачи, письма, поход, итоги дня.
-import { useEffect, useRef, useState } from 'preact/hooks';
-import { ESTIMATE_BY_LEVEL, SWITCH_COST, estimateOf, levelForEstimate } from '../game/rules';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { ESTIMATE_BY_LEVEL, SWITCH_COST, estimateOf, levelForEstimate, undeadRank } from '../game/rules';
 import {
   addQuest,
+  addRoutine,
   addTask,
   daysOverdue,
   endDay,
   findQuest,
+  findRoutine,
   findTask,
   inboxOf,
   isUndead,
@@ -17,32 +19,41 @@ import {
   removeQuest,
   setFrog,
   spentNow,
+  stopRoutine,
+  unrelease,
   updateQuest,
+  updateRoutine,
   updateTask,
+  waitingOf,
   winQuest,
 } from '../game/state';
-import { addDays, formatDue, formatDuration } from '../game/time';
-import type { DayKey, Level, QuestColor, QuestKind, State, Task } from '../game/types';
-import { undeadRank } from '../game/rules';
+import { addDays, formatDue, formatDuration, nextRepeat, parseDay } from '../game/time';
+import type { DayKey, Level, QuestColor, QuestKind, Repeat, State, Task } from '../game/types';
 import {
   CLASS_BY_LEVEL,
   CLASS_NAME,
+  IN_WEEKDAY,
   LEVEL_HINT,
   LEVEL_ROMAN,
   QUEST_KIND_HINT,
   QUEST_KIND_NAME,
   UNDEAD_NAME,
   W,
+  WEEKDAY_CHIPS,
+  repeatName,
 } from '../game/words';
 import type { Ui } from './App';
 import { CallLabel, callToFire, finish } from './Camp';
 import { GIcon, LIcon } from './Icon';
-import { Chips, QuestDot, TaskMeta, questName } from './parts';
-import { SyncConflictSheet } from './SyncPanel';
+import { Chips, LevelMark, QuestDot, TaskMeta, questName } from './parts';
+import { AboutSheet, RulesSheet } from './Info';
+import { WipeSheet } from './Chronicle';
+import { SyncConflictSheet, SyncSheet } from './SyncPanel';
 
 export type SheetState =
   | { kind: 'add'; questId?: string | null; day?: DayKey | null }
   | { kind: 'edit'; taskId: string }
+  | { kind: 'routine'; routineId: string }
   | { kind: 'task'; taskId: string }
   | { kind: 'summary' }
   | { kind: 'letters' }
@@ -50,7 +61,11 @@ export type SheetState =
   | { kind: 'newQuest' }
   | { kind: 'editQuest'; questId: string }
   | { kind: 'frog' }
-  | { kind: 'syncConflict' };
+  | { kind: 'sync' }
+  | { kind: 'syncConflict' }
+  | { kind: 'rules' }
+  | { kind: 'about' }
+  | { kind: 'wipe' };
 
 export function Sheets({ ui, sheet }: { ui: Ui; sheet: SheetState }) {
   switch (sheet.kind) {
@@ -58,6 +73,8 @@ export function Sheets({ ui, sheet }: { ui: Ui; sheet: SheetState }) {
       return <TaskForm ui={ui} preset={sheet} />;
     case 'edit':
       return <TaskForm ui={ui} taskId={sheet.taskId} />;
+    case 'routine':
+      return <TaskForm ui={ui} routineId={sheet.routineId} />;
     case 'task':
       return <TaskSheet ui={ui} taskId={sheet.taskId} />;
     case 'summary':
@@ -72,13 +89,30 @@ export function Sheets({ ui, sheet }: { ui: Ui; sheet: SheetState }) {
       return <QuestForm ui={ui} questId={sheet.questId} />;
     case 'frog':
       return <FrogSheet ui={ui} />;
+    case 'sync':
+      return <SyncSheet ui={ui} />;
     case 'syncConflict':
       return <SyncConflictSheet ui={ui} />;
+    case 'rules':
+      return <RulesSheet ui={ui} />;
+    case 'about':
+      return <AboutSheet ui={ui} />;
+    case 'wipe':
+      return <WipeSheet ui={ui} />;
   }
 }
 
+const FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Лист поверх экрана. Фокус при открытии уходит в лист, если лист сам не поставил его в поле.
+ * Экран под листом в это время недоступен (inert в App), поэтому Tab ходит только по листу,
+ * а после закрытия App возвращает фокус туда, откуда лист открыли.
+ */
 export function Sheet(p: { title: string; onClose: () => void; children: preact.ComponentChildren; footer?: preact.ComponentChildren }) {
   const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const [scrollOnly, setScrollOnly] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') p.onClose();
@@ -86,16 +120,26 @@ export function Sheet(p: { title: string; onClose: () => void; children: preact.
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [p.onClose]);
+  useEffect(() => {
+    if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
+  }, []);
+  // Длинный текст без кнопок (правила) прокручивается только с клавиатуры, если до него можно дойти Tab.
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (el) setScrollOnly(el.scrollHeight > el.clientHeight && !el.querySelector(FOCUSABLE));
+  });
   return (
     <div class="overlay" onClick={(e) => e.target === e.currentTarget && p.onClose()}>
-      <div class="modal" role="dialog" aria-modal="true" aria-label={p.title} ref={ref}>
+      <div class="modal" role="dialog" aria-modal="true" aria-label={p.title} ref={ref} tabIndex={-1}>
         <div class="modal-head">
           <h2>{p.title}</h2>
           <button class="icon-btn" aria-label="Закрыть" onClick={p.onClose}>
             <LIcon name="close" size={20} />
           </button>
         </div>
-        <div class="modal-body">{p.children}</div>
+        <div class="modal-body" ref={body} tabIndex={scrollOnly ? 0 : undefined}>
+          {p.children}
+        </div>
         {p.footer && <div class="modal-foot">{p.footer}</div>}
       </div>
     </div>
@@ -114,25 +158,46 @@ const ESTIMATES: { value: number | null; label: string }[] = [
   { value: null, label: 'дни' },
 ];
 
-function TaskForm({ ui, preset, taskId }: { ui: Ui; preset?: { questId?: string | null; day?: DayKey | null }; taskId?: string }) {
+type RepeatKind = 'none' | Repeat['every'];
+
+const REPEATS: { value: RepeatKind; label: string }[] = [
+  { value: 'none', label: 'Не повторять' },
+  { value: 'day', label: 'Каждый день' },
+  { value: 'workday', label: 'По рабочим дням' },
+  { value: 'week', label: 'Раз в неделю' },
+];
+
+/**
+ * Новая задача, правка задачи и правка повторяющейся задачи. У задачи, которую прислала
+ * повторяющаяся, правка меняет и саму повторяющуюся. Повторяющаяся без ждущей задачи
+ * правится отдельно (routineId): у неё нет дня и срока, а перестать повторять её можно кнопкой.
+ */
+function TaskForm({ ui, preset, taskId, routineId }: { ui: Ui; preset?: { questId?: string | null; day?: DayKey | null }; taskId?: string; routineId?: string }) {
   const s = ui.store.state;
   const editing = taskId ? findTask(s, taskId) : undefined;
-  const quests = s.quests.filter((q) => !q.wonAt);
-  const [title, setTitle] = useState(editing?.title ?? '');
-  const [questId, setQuestId] = useState<string | null>(editing ? editing.questId : preset?.questId ?? null);
-  const [estimate, setEstimate] = useState<number | null>(editing ? estimateOf(editing) : 30);
-  const [level, setLevel] = useState<Level>(editing?.level ?? 1);
-  const [levelTouched, setLevelTouched] = useState(!!editing);
+  const routine = findRoutine(s, routineId ?? editing?.routineId);
+  const from = editing ?? routine;
+  const quests = s.quests.filter((q) => !q.wonAt || q.id === from?.questId);
+  const [title, setTitle] = useState(from?.title ?? '');
+  const [questId, setQuestId] = useState<string | null>(from ? from.questId : preset?.questId ?? null);
+  const [estimate, setEstimate] = useState<number | null>(from ? estimateOf(from) : 30);
+  const [level, setLevel] = useState<Level>(from?.level ?? 1);
+  const [levelTouched, setLevelTouched] = useState(!!from);
   const [day, setDay] = useState<DayKey | null>(editing ? editing.day : preset?.day !== undefined ? preset.day : s.day);
   const [due, setDue] = useState<DayKey | null>(editing?.due ?? null);
-  const [at, setAt] = useState<string>(editing?.at ?? '');
+  const [at, setAt] = useState<string>(from?.at ?? '');
+  const [repeatKind, setRepeatKind] = useState<RepeatKind>(routine?.repeat.every ?? 'none');
+  const [weekday, setWeekday] = useState<number>(routine?.repeat.every === 'week' ? routine.repeat.weekday : parseDay(s.day).getDay());
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => input.current?.focus(), []);
+  useEffect(() => {
+    if (!from) input.current?.focus();
+  }, []);
 
   const autoLevel: Level = estimate === null ? 4 : levelForEstimate(estimate);
   const lvl = levelTouched ? level : autoLevel;
   const tomorrow = addDays(s.day, 1);
-  const willBeLetter = !questId && !day;
+  const repeat: Repeat | null = repeatKind === 'none' ? null : repeatKind === 'week' ? { every: 'week', weekday } : { every: repeatKind };
+  const willBeLetter = !repeat && !questId && !day;
 
   const save = (e?: Event) => {
     e?.preventDefault();
@@ -140,20 +205,28 @@ function TaskForm({ ui, preset, taskId }: { ui: Ui; preset?: { questId?: string 
       input.current?.focus();
       return;
     }
-    const patch = {
-      title: title.trim(),
-      questId,
-      level: lvl,
-      estimateMin: estimate === ESTIMATE_BY_LEVEL[lvl] ? null : estimate,
-      day,
-      due,
-      at: at || null,
-    };
+    const fields = { title: title.trim(), questId, level: lvl, estimateMin: estimate === ESTIMATE_BY_LEVEL[lvl] ? null : estimate, at: at || null };
+    if (repeat) {
+      const rid = ui.store.act((st, now) => {
+        if (routine) {
+          updateRoutine(st, routine.id, { ...fields, repeat });
+          return routine.id;
+        }
+        if (editing) updateTask(st, editing.id, { ...fields, due: null });
+        return addRoutine(st, now, { ...fields, repeat }, editing?.id);
+      });
+      if (!routine || JSON.stringify(routine.repeat) !== JSON.stringify(repeat)) ui.toast(routineNews(ui.store.state, rid, repeat));
+      ui.close();
+      return;
+    }
+    const patch = { ...fields, day, due };
     if (editing) {
       ui.store.act((st) => {
+        if (routine) stopRoutine(st, routine.id);
         updateTask(st, editing.id, patch);
         if (patch.day !== editing.day) planTask(st, editing.id, patch.day);
       });
+      if (routine) ui.toast('Задача больше не повторяется');
       ui.close();
       return;
     }
@@ -164,11 +237,11 @@ function TaskForm({ ui, preset, taskId }: { ui: Ui; preset?: { questId?: string 
 
   return (
     <Sheet
-      title={editing ? 'Задача' : 'Новая задача'}
+      title={editing ? 'Задача' : routine ? 'Повторяющаяся задача' : 'Новая задача'}
       onClose={ui.close}
       footer={
         <button class="btn btn-gold btn-wide" onClick={save}>
-          {editing ? 'Сохранить' : willBeLetter ? 'Отдать вестнику' : 'Взять в отряд'}
+          {from ? 'Сохранить' : willBeLetter ? 'Отдать вестнику' : 'Взять в отряд'}
         </button>
       }
     >
@@ -188,33 +261,65 @@ function TaskForm({ ui, preset, taskId }: { ui: Ui; preset?: { questId?: string 
       <Chips
         label={`Уровень: ${CLASS_NAME[CLASS_BY_LEVEL[lvl]].toLowerCase()}, ${LEVEL_HINT[lvl]}`}
         value={lvl}
-        options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l] }))}
+        options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l], sr: `уровень ${l}, ${CLASS_NAME[CLASS_BY_LEVEL[l]].toLowerCase()}` }))}
         onChange={(l) => { setLevel(l); setLevelTouched(true); }}
       />
-      <Chips
-        label="Когда к костру"
-        value={day}
-        options={[
-          { value: s.day, label: 'Сегодня' },
-          { value: tomorrow, label: 'Завтра' },
-          { value: null, label: 'Потом' },
-          ...(day && day !== s.day && day !== tomorrow ? [{ value: day, label: formatDue(day, s.day) }] : []),
-        ]}
-        onChange={setDay}
-      />
+      <Chips label="Повторять" value={repeatKind} options={routine && !editing ? REPEATS.slice(1) : REPEATS} onChange={setRepeatKind} />
+      {repeatKind === 'week' && <Chips label="В какой день недели" value={weekday} options={WEEKDAY_CHIPS} onChange={setWeekday} />}
+      {!repeat && (
+        <Chips
+          label="Когда к костру"
+          value={day}
+          options={[
+            { value: s.day, label: 'Сегодня' },
+            { value: tomorrow, label: 'Завтра' },
+            { value: null, label: 'Потом' },
+            ...(day && day !== s.day && day !== tomorrow ? [{ value: day, label: formatDue(day, s.day) }] : []),
+          ]}
+          onChange={setDay}
+        />
+      )}
       <div class="field-row">
+        {!repeat && (
+          <label class="field">
+            <span class="field-label">Срок</span>
+            <input class="input" type="date" value={due ?? ''} onInput={(e) => setDue(e.currentTarget.value || null)} />
+          </label>
+        )}
         <label class="field">
-          <span class="field-label">Срок</span>
-          <input class="input" type="date" value={due ?? ''} onInput={(e) => setDue(e.currentTarget.value || null)} />
-        </label>
-        <label class="field">
-          <span class="field-label">Время</span>
+          <span class="field-label">Во сколько</span>
           <input class="input" type="time" value={at} onInput={(e) => setAt(e.currentTarget.value)} />
         </label>
       </div>
+      {repeat && <p class="note">В свои дни задача сама встаёт в план дня. Пока прошлая не сделана, новая не приходит. Логово похода повторяющиеся задачи не ранят: они не кончаются.</p>}
       {willBeLetter && <p class="note">Без похода и без дня задача уходит письмом к вестнику. Разобрать письма можно в сборе отряда.</p>}
+      {routine && !editing && (
+        <div class="actions">
+          <button
+            class="act act-danger"
+            onClick={() => {
+              ui.store.act((st) => stopRoutine(st, routine.id));
+              ui.toast('Задача больше не повторяется');
+              ui.close();
+            }}
+          >
+            <LIcon name="close" size={16} />
+            Больше не повторять
+          </button>
+        </div>
+      )}
     </Sheet>
   );
+}
+
+/** Что сказать после сохранения повторяющейся задачи: когда она придёт. */
+function routineNews(s: State, routineId: string, repeat: Repeat): string {
+  const name = repeatName(repeat);
+  if (waitingOf(s, routineId)?.day === s.day) return `Повторяется ${name}. Сегодня уже у костра`;
+  const next = nextRepeat(repeat, addDays(s.day, 1), s.settings);
+  if (!next) return `Повторяется ${name}, но в распорядке нет рабочих дней`;
+  const when = next === addDays(s.day, 1) ? 'завтра' : IN_WEEKDAY[parseDay(next).getDay()];
+  return repeat.every === 'week' ? `Придёт ${when}, а дальше каждую неделю` : `Повторяется ${name}. Придёт ${when}`;
 }
 
 // ---------- карточка задачи ----------
@@ -233,6 +338,7 @@ function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
   const spent = spentNow(s, t, ui.now);
   const switchCost = s.lastQuestId !== null && t.questId !== s.lastQuestId && !isCurrent ? SWITCH_COST : 0;
   const done = t.status === 'done';
+  const routine = findRoutine(s, t.routineId);
 
   const close = ui.close;
   return (
@@ -241,12 +347,20 @@ function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
         <div class="task-title">{t.title}</div>
         <div class="task-sub">
           <QuestDot q={q} />
-          {questName(s, t)} · {LEVEL_ROMAN[t.level]} уровень · {est ? `~${formatDuration(est)}` : 'несколько дней'}
+          <span>
+            {questName(s, t)} · <LevelMark level={t.level} /> · {est ? `~${formatDuration(est)}` : 'несколько дней'}
+          </span>
         </div>
         <div class="task-facts">
           {spent > 0 && <span>Потрачено {formatDuration(Math.max(1, Math.round(spent / 60_000)))}</span>}
           {t.due && <span class={undead ? 'meta-undead' : ''}>Срок: {formatDue(t.due, s.day)}</span>}
           {t.at && <span>В {t.at}</span>}
+          {routine && (
+            <span class="fact-repeat">
+              <LIcon name="repeat" size={14} />
+              Повторяется {repeatName(routine.repeat)}
+            </span>
+          )}
           {done && t.reward && <span>Сделано: +{t.reward.gold} золота, +{t.reward.xp} опыта</span>}
         </div>
       </div>
@@ -269,7 +383,7 @@ function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
           <Chips
             label="Уровень при сдаче"
             value={level ?? t.level}
-            options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l], hint: LEVEL_HINT[l] }))}
+            options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l], sr: `уровень ${l},`, hint: LEVEL_HINT[l] }))}
             onChange={setLevel}
           />
           <div class="actions">
@@ -304,11 +418,22 @@ function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
               <LIcon name="edit" size={16} />
               Изменить
             </button>
+            {routine && (
+              <button
+                class="act"
+                onClick={() => {
+                  ui.store.act((st) => stopRoutine(st, routine.id));
+                  ui.toast('Больше не повторяется. Эта задача осталась в отряде');
+                }}
+              >
+                <LIcon name="repeat" size={16} />
+                Больше не повторять
+              </button>
+            )}
             <button
               class="act act-danger"
               onClick={() => {
-                ui.store.act((st, now) => release(st, now, t.id));
-                ui.toast('Спутник отпущен');
+                releaseWithUndo(ui, t.id, routine ? 'Спутник отпущен до следующего раза' : 'Спутник отпущен');
                 close();
               }}
             >
@@ -320,6 +445,13 @@ function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
       )}
     </Sheet>
   );
+}
+
+/** Отпустить задачу; несколько секунд её можно вернуть одной кнопкой, потом из Королевства. */
+function releaseWithUndo(ui: Ui, id: string, text: string): void {
+  const frog = ui.store.state.frogId === id;
+  ui.store.act((st, now) => release(st, now, id));
+  ui.toast(text, { label: 'Вернуть', run: () => ui.store.act((st) => unrelease(st, id, frog)) });
 }
 
 // ---------- письма ----------
@@ -360,7 +492,7 @@ function Letter({ ui, t, quests }: { ui: Ui; t: Task; quests: State['quests'] })
         <button class="btn btn-ghost btn-sm" disabled={!questId} onClick={() => ui.store.act((st) => updateTask(st, t.id, { questId }))}>
           В отряд
         </button>
-        <button class="btn btn-ghost btn-sm" onClick={() => ui.store.act((st, now) => release(st, now, t.id))}>
+        <button class="btn btn-ghost btn-sm" onClick={() => releaseWithUndo(ui, t.id, 'Письмо отпущено')}>
           {W.release}
         </button>
       </div>
@@ -375,7 +507,7 @@ function FrogSheet({ ui }: { ui: Ui }) {
   const plan = planOf(s).filter((t) => t.status === 'open');
   return (
     <Sheet title={W.frogTitle} onClose={ui.close}>
-      <p class="note">Самая тяжёлая задача дня. Сделай её первой из серьёзных, и опыт за неё удвоится.</p>
+      <p class="note">Самая тяжёлая задача дня: опыт за неё удвоится. Браться за неё лучше первой, пока силы полны.</p>
       {plan.length === 0 && <p class="note">Сначала позови задачи к костру.</p>}
       {plan.map((t) => (
         <button
@@ -388,7 +520,9 @@ function FrogSheet({ ui }: { ui: Ui }) {
         >
           <GIcon name="frog" size={16} class={s.frogId === t.id ? 'ic-green' : 'ic-dim'} />
           <span class="row-title">{t.title}</span>
-          <span class="meta">{LEVEL_ROMAN[t.level]} ур.</span>
+          <span class="meta">
+            <LevelMark level={t.level} short />
+          </span>
         </button>
       ))}
     </Sheet>
@@ -510,11 +644,13 @@ function QuestSheet({ ui, questId }: { ui: Ui; questId: string }) {
     <Sheet title={q.name} onClose={ui.close}>
       <div class="task-sub">
         <QuestDot q={q} />
-        {QUEST_KIND_NAME[q.kind]} поход · {done} сделано · {open.length} в отряде
+        {q.kind === 'any' ? 'поход в любое время' : `${QUEST_KIND_NAME[q.kind]} поход`} · {done} сделано · {open.length} в отряде
       </div>
       {lair.max > 0 && (
         <div class="lair">
-          <span>Логово {lair.hp} / {lair.max}</span>
+          <span>
+            Логово: {lair.hp} из {lair.max}
+          </span>
           <span class="bar bar-red" aria-hidden="true">
             <span style={{ width: `${(lair.hp / lair.max) * 100}%` }} />
           </span>
@@ -528,7 +664,9 @@ function QuestSheet({ ui, questId }: { ui: Ui; questId: string }) {
       <div class="sublist">
         {open.map((t) => (
           <button key={t.id} class="row" onClick={() => ui.open({ kind: 'task', taskId: t.id })}>
-            <span class={`num num-${isUndead(t, s.day) ? 'undead' : t.day === s.day ? 'today' : 'idle'} num-sm`}>{LEVEL_ROMAN[t.level]}</span>
+            <span class={`num num-${isUndead(t, s.day) ? 'undead' : t.day === s.day ? 'today' : 'idle'} num-sm`} aria-hidden="true">
+              {LEVEL_ROMAN[t.level]}
+            </span>
             <span class="row-title">{t.title}</span>
             <TaskMeta s={s} t={t} />
           </button>

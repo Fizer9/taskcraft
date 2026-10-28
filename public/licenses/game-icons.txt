@@ -1,0 +1,28 @@
+Иконки Лагеря у костра взяты с https://game-icons.net и распространяются
+по лицензии Creative Commons Attribution 3.0 Unported (CC BY 3.0):
+https://creativecommons.org/licenses/by/3.0/
+
+Lorc (https://lorcblog.blogspot.com):
+  sun            https://game-icons.net/1x1/lorc/sun.html
+  frog           https://game-icons.net/1x1/lorc/frog.html
+  hourglass      https://game-icons.net/1x1/lorc/hourglass.html
+  campfire       https://game-icons.net/1x1/lorc/campfire.html
+  castle         https://game-icons.net/1x1/lorc/castle.html
+  scroll-unfurled https://game-icons.net/1x1/lorc/scroll-unfurled.html
+  sunrise        https://game-icons.net/1x1/lorc/sunrise.html
+
+Delapouite (https://delapouite.com):
+  two-coins      https://game-icons.net/1x1/delapouite/two-coins.html
+  check-mark     https://game-icons.net/1x1/delapouite/check-mark.html
+  night-sleep    https://game-icons.net/1x1/delapouite/night-sleep.html
+  log            https://game-icons.net/1x1/delapouite/log.html
+  sunset         https://game-icons.net/1x1/delapouite/sunset.html
+
+Sbed:
+  death-skull    https://game-icons.net/1x1/sbed/death-skull.html
+
+Zeromancer:
+  heart-plus     https://game-icons.net/1x1/zeromancer/heart-plus.html
+
+Иконки использованы без изменений рисунка: только перекрашены в цвет интерфейса
+и показаны без чёрного фона.

@@ -7,15 +7,18 @@
 // в гист сами по себе не пишутся: время одинаково досчитывает каждое устройство.
 import { isPristine, mergeGames } from '../game/merge';
 import { randomId, settle } from '../game/state';
-import { checkSave, type Store } from '../game/store';
+import { SAVE_VERSION, checkSave, type Store } from '../game/store';
+import { addDays, dayKey } from '../game/time';
 import type { State } from '../game/types';
-import { GitHub, GitHubError, type Fetch, type SaveDoc } from './github';
+import { GitHub, GitHubError, type Fetch, type GitHubErrorKind, type SaveDoc } from './github';
 
 const KEY = 'taskcraft-lager-github';
 /** Пауза после действия перед записью: серия нажатий уходит одной записью. */
 const PUSH_DELAY = 4000;
 /** Как часто смотреть, не сохранило ли что-то другое устройство. */
 const POLL_EVERY = 2 * 60_000;
+/** Срок токена, который ставит ссылка на его создание (TOKEN_URL). */
+const TOKEN_DAYS = 366;
 
 interface Config {
   token: string;
@@ -26,9 +29,20 @@ interface Config {
   base: State | null;
   /** Были действия игрока, которых ещё нет в гисте. */
   dirty: boolean;
+  /** С какого времени они ждут. */
+  dirtyAt?: number;
   /** Игру заменили здесь (загрузили из файла): в гист она идёт как есть, без слияния. */
   replaced: boolean;
   syncedAt: number | null;
+  /** День, когда токен перестанет работать; null, если неизвестно. */
+  tokenExpires?: string | null;
+  /** Срок не сообщил GitHub и не указал игрок: он посчитан от дня подключения. */
+  tokenGuessed?: boolean;
+}
+
+export interface TokenExpiry {
+  day: string;
+  guessed: boolean;
 }
 
 export type SyncPhase = 'off' | 'syncing' | 'ok' | 'offline' | 'error' | 'conflict';
@@ -45,6 +59,8 @@ export interface SyncStatus {
   login: string | null;
   syncedAt: number | null;
   error: string | null;
+  /** Что за ошибка: по 'auth' экран сразу предлагает заменить токен. */
+  errorKind: GitHubErrorKind | null;
   conflict: SyncConflict | null;
 }
 
@@ -96,12 +112,32 @@ export class Sync {
     private device: string = guessDevice(),
   ) {
     this.cfg = this.loadConfig();
-    this.status = { phase: this.cfg ? 'ok' : 'off', login: this.cfg?.login ?? null, syncedAt: this.cfg?.syncedAt ?? null, error: null, conflict: null };
+    this.status = { phase: this.cfg ? 'ok' : 'off', login: this.cfg?.login ?? null, syncedAt: this.cfg?.syncedAt ?? null, error: null, errorKind: null, conflict: null };
     store.onAction(() => this.onAction());
   }
 
   get connected(): boolean {
     return this.cfg !== null;
+  }
+
+  /** С какого времени действия игрока ждут записи в GitHub; null, если всё записано. */
+  get pendingSince(): number | null {
+    return this.cfg?.dirty ? this.cfg.dirtyAt ?? null : null;
+  }
+
+  /** Когда токен перестанет работать. */
+  get tokenExpiry(): TokenExpiry | null {
+    const c = this.cfg;
+    return c?.tokenExpires ? { day: c.tokenExpires, guessed: !!c.tokenGuessed } : null;
+  }
+
+  /** Игрок сам указал срок токена (он виден на странице токенов GitHub). */
+  setTokenExpiry(day: string): void {
+    if (!this.cfg) return;
+    this.cfg.tokenExpires = day;
+    this.cfg.tokenGuessed = false;
+    this.saveConfig();
+    this.setStatus({});
   }
 
   subscribe(fn: () => void): () => void {
@@ -117,9 +153,9 @@ export class Sync {
     token = token.trim();
     if (!token) throw new GitHubError('Вставь токен', 'auth');
     const gh = new GitHub(token, this.fetchFn);
-    const login = await gh.user();
+    const { login, expires } = await gh.user();
     let gistId = await gh.findSave();
-    const cfg: Config = { token, login, gistId: gistId ?? '', stamp: null, base: null, dirty: false, replaced: false, syncedAt: null };
+    const cfg: Config = { token, login, gistId: gistId ?? '', stamp: null, base: null, dirty: false, replaced: false, syncedAt: null, ...this.expiry(expires) };
     if (!gistId) {
       const { doc, state } = this.makeDoc(this.store.state);
       gistId = await gh.create(doc);
@@ -131,6 +167,28 @@ export class Sync {
     if (!cfg.stamp) await this.syncNow();
   }
 
+  /**
+   * Новый токен вместо старого (срок кончается или токен отозвали). Он должен быть от того же
+   * аккаунта и видеть гист с сохранением; иначе ошибка, и остаётся старый.
+   */
+  async replaceToken(token: string): Promise<void> {
+    const cfg = this.cfg;
+    if (!cfg) return;
+    token = token.trim();
+    if (!token) throw new GitHubError('Вставь токен', 'auth');
+    const gh = new GitHub(token, this.fetchFn);
+    const { login, expires } = await gh.user();
+    if (login !== cfg.login) {
+      throw new GitHubError(`Это токен аккаунта ${login}, а игра сохраняется у ${cfg.login}. Чтобы сменить аккаунт, отключи GitHub и подключи снова`, 'other');
+    }
+    await gh.read(cfg.gistId);
+    if (this.cfg !== cfg) return;
+    Object.assign(cfg, { token }, this.expiry(expires));
+    this.saveConfig();
+    this.setStatus({ phase: 'ok', error: null });
+    await this.syncNow();
+  }
+
   /** Забыть токен на этом устройстве. Гист на GitHub остаётся. */
   disconnect(): void {
     clearTimeout(this.timer);
@@ -139,12 +197,31 @@ export class Sync {
     this.setStatus({ phase: 'off', login: null, syncedAt: null, error: null, conflict: null });
   }
 
+  /** Удалить гист с сохранением и забыть токен. Если GitHub не ответил, ничего не меняется. */
+  async removeSave(): Promise<void> {
+    const cfg = this.cfg;
+    if (!cfg) return;
+    clearTimeout(this.timer);
+    await new GitHub(cfg.token, this.fetchFn).remove(cfg.gistId);
+    if (this.cfg === cfg) this.disconnect();
+  }
+
+  /**
+   * Сохранение в браузере не открылось, и игрок начал заново: следующая сверка возьмёт игру
+   * из гиста как есть, а не станет сливать её с новой пустой.
+   */
+  pullFresh(): void {
+    if (!this.cfg) return;
+    Object.assign(this.cfg, { stamp: null, base: null, dirty: false, replaced: false });
+    this.saveConfig();
+  }
+
   /** Игру заменили копией из файла: в GitHub она пойдёт целиком. */
   replaceGame(next: State): void {
     this.store.replace(next);
     if (!this.cfg) return;
     this.cfg.replaced = true;
-    this.cfg.dirty = true;
+    this.markDirty(this.cfg);
     this.saveConfig();
     this.schedule(0);
   }
@@ -183,7 +260,7 @@ export class Sync {
       return;
     }
     cfg.replaced = true;
-    cfg.dirty = true;
+    this.markDirty(cfg);
     this.saveConfig();
     this.setStatus({ phase: 'ok', conflict: null });
     await this.syncNow();
@@ -215,10 +292,15 @@ export class Sync {
     this.actions += 1;
     if (!this.cfg) return;
     if (!this.cfg.dirty) {
-      this.cfg.dirty = true;
+      this.markDirty(this.cfg);
       this.saveConfig();
     }
     this.schedule(PUSH_DELAY);
+  }
+
+  private markDirty(cfg: Config): void {
+    if (!cfg.dirty) cfg.dirtyAt = this.store.now();
+    cfg.dirty = true;
   }
 
   private schedule(ms: number): void {
@@ -232,17 +314,24 @@ export class Sync {
     const gh = new GitHub(cfg.token, this.fetchFn);
     this.setStatus({ phase: 'syncing', error: null });
     try {
-      const remote = await gh.read(cfg.gistId);
+      const { doc: remote, version: readVersion } = await gh.read(cfg.gistId);
       if (this.cfg !== cfg) return;
       // Отсюда и до записи без await: действие игрока не может вклиниться между чтением и слиянием.
       const now = this.store.now();
       const local = this.store.state;
       let write = false;
+      /** Что лежало в гисте при чтении: от этого считается и наша запись. */
+      let read: State | null = null;
       if (!remote) {
         write = true;
       } else {
         const rs = checkSave(remote.state);
-        if (!rs) throw new GitHubError('В гисте повреждённое сохранение', 'other');
+        if (!rs) {
+          const v = (remote.state as { v?: unknown } | null)?.v;
+          const newer = typeof v === 'number' && v > SAVE_VERSION;
+          throw new GitHubError(newer ? 'В GitHub игра из более новой версии Лагеря. Обнови страницу' : 'В гисте повреждённое сохранение', 'other');
+        }
+        read = rs;
         if (remote.stamp === cfg.stamp || cfg.replaced) {
           write = cfg.dirty || cfg.replaced;
         } else if (rs.gameId !== local.gameId) {
@@ -265,23 +354,44 @@ export class Sync {
       }
       if (write) {
         const seen = this.actions;
+        const replaced = cfg.replaced;
         const { doc, state } = this.makeDoc(this.store.state);
-        await gh.write(cfg.gistId, doc);
+        const versions = await gh.write(cfg.gistId, doc);
         if (this.cfg !== cfg) return;
         cfg.stamp = doc.stamp;
         cfg.base = state;
         cfg.replaced = false;
         // Пока шла запись, игрок мог что-то сделать: это уйдёт следующей записью.
-        cfg.dirty = this.actions !== seen;
-        if (cfg.dirty) this.schedule(PUSH_DELAY);
+        cfg.dirty = false;
+        if (this.actions !== seen) this.markDirty(cfg);
+        // Между нашим чтением и записью другое устройство успело записать своё, и мы его затёрли.
+        // Забираем ту версию из истории гиста, сливаем и сразу пишем ещё раз.
+        const between = versions[1];
+        if (readVersion && between && between !== readVersion && !replaced) {
+          const theirs = await gh.readVersion(cfg.gistId, between);
+          if (this.cfg !== cfg) return;
+          const ts = theirs && checkSave(theirs.state);
+          if (ts && ts.gameId === this.store.state.gameId) {
+            this.store.replace(mergeGames(read, this.store.state, ts, this.store.now()));
+            this.markDirty(cfg);
+            this.again = true;
+          }
+        }
+        if (cfg.dirty && !this.again) this.schedule(PUSH_DELAY);
       }
       cfg.syncedAt = this.store.now();
       this.saveConfig();
       this.setStatus({ phase: 'ok', syncedAt: cfg.syncedAt, error: null });
     } catch (e) {
+      // GitHub отключили, пока шла сверка: её ошибка уже ни о чём.
+      if (this.cfg !== cfg) return;
       const err = e instanceof GitHubError ? e : new GitHubError('Не получилось сохранить в GitHub', 'other');
-      this.setStatus({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message });
+      this.setStatus({ phase: err.kind === 'network' ? 'offline' : 'error', error: err.message, errorKind: err.kind });
     }
+  }
+
+  private expiry(expires: string | null): Pick<Config, 'tokenExpires' | 'tokenGuessed'> {
+    return { tokenExpires: expires ?? addDays(dayKey(this.store.now()), TOKEN_DAYS), tokenGuessed: !expires };
   }
 
   private adopt(cfg: Config, remote: State, stamp: string | null, now: number): void {
@@ -300,6 +410,7 @@ export class Sync {
   }
 
   private setStatus(patch: Partial<SyncStatus>): void {
+    if (patch.error === null) patch.errorKind = null;
     this.status = { ...this.status, ...patch };
     for (const fn of this.listeners) fn();
   }
@@ -309,7 +420,12 @@ export class Sync {
     if (!raw) return null;
     try {
       const c = JSON.parse(raw) as Config;
-      return c && typeof c.token === 'string' && typeof c.gistId === 'string' ? c : null;
+      if (!c || typeof c.token !== 'string' || typeof c.gistId !== 'string') return null;
+      // Версия для слияния могла быть записана прошлой версией игры: доводим её до нынешней.
+      // Если она не читается, следующая сверка сольёт игры без неё, ничего не теряя.
+      if (c.base) c.base = checkSave(c.base);
+      if (!c.base) c.stamp = null;
+      return c;
     } catch {
       return null;
     }

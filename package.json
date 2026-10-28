@@ -1,13 +1,14 @@
 {
   "name": "taskcraft-lager",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/build/finish.mjs",
     "preview": "vite preview --host",
     "test": "vitest run",
+    "e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,9 +18,13 @@
     "preact": "10.29.8"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@preact/preset-vite": "2.10.6",
+    "@types/node": "22.19.19",
+    "axe-core": "4.13.0",
     "typescript": "5.9.3",
     "vite": "7.3.7",
-    "vitest": "4.0.18"
-  }
+    "vitest": "4.1.12"
+  },
+  "license": "UNLICENSED"
 }

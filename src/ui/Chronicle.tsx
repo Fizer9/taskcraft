@@ -1,17 +1,20 @@
-// Летопись: герой, последние дни, настройки, копия сохранения и авторы.
-import { useRef } from 'preact/hooks';
+// Летопись: герой, последние дни, настройки, копия сохранения, справка и «Стереть всё».
+import { useRef, useState } from 'preact/hooks';
 import { heroLevel } from '../game/rules';
 import { doneOn } from '../game/state';
-import { parseSave } from '../game/store';
-import { addDays, formatDate, formatDuration, formatMinutes } from '../game/time';
+import { isNewerSave, parseSave } from '../game/store';
+import { addDays, formatDate, formatDuration, formatMinutes, scheduleError } from '../game/time';
 import type { Settings } from '../game/types';
-import { W } from '../game/words';
+import { W, WEEKDAY_CHIPS } from '../game/words';
+import { GitHubError } from '../sync/github';
+import { BUILD, VERSION } from '../version';
 import type { Ui } from './App';
-import { GIcon } from './Icon';
-import { SyncPanel } from './SyncPanel';
-
-const WEEK = [1, 2, 3, 4, 5, 6, 0];
-const WEEK_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+import { downloadGame } from './files';
+import { GIcon, LIcon } from './Icon';
+import { clearLocal } from './local';
+import { ChipText } from './parts';
+import { Sheet } from './Sheets';
+import { SyncPanel, useSync } from './SyncPanel';
 
 export function Chronicle({ ui }: { ui: Ui }) {
   const { store } = ui;
@@ -21,20 +24,21 @@ export function Chronicle({ ui }: { ui: Ui }) {
   const file = useRef<HTMLInputElement>(null);
 
   const setSetting = (patch: Partial<Settings>) => store.act((st) => Object.assign(st.settings, patch));
-
-  const download = () => {
-    const blob = new Blob([store.exportJson()], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `lager-${s.day}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+  const [timeError, setTimeError] = useState<string | null>(null);
+  // Время, при котором смены путаются, не сохраняется: поле возвращается к прежнему.
+  const setTime = (patch: Partial<Settings>) => {
+    const error = scheduleError({ ...s.settings, ...patch });
+    setTimeError(error);
+    if (!error) setSetting(patch);
   };
 
+  const download = () => downloadGame(store);
+
   const upload = async (f: File) => {
-    const next = parseSave(await f.text());
+    const text = await f.text();
+    const next = parseSave(text);
     if (!next) {
-      ui.toast('Это не копия Лагеря');
+      ui.toast(isNewerSave(text) ? 'Копия из более новой версии Лагеря: обнови страницу' : 'Это не копия Лагеря');
       return;
     }
     if (!confirm('Заменить текущую игру копией из файла?')) return;
@@ -53,7 +57,13 @@ export function Chronicle({ ui }: { ui: Ui }) {
         </div>
         <div class="hero-body">
           <div class="hero-xp">
-            {lvl.into} / {lvl.need} опыта до следующего
+            <span aria-hidden="true">
+              {lvl.into} / {lvl.need}
+            </span>
+            <span class="sr-only">
+              {lvl.into} из {lvl.need}
+            </span>{' '}
+            опыта до следующего
           </div>
           <span class="bar bar-gold" aria-hidden="true">
             <span style={{ width: `${(lvl.into / lvl.need) * 100}%` }} />
@@ -67,7 +77,7 @@ export function Chronicle({ ui }: { ui: Ui }) {
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">Последние дни</span>
+          <h2 class="sc">Последние дни</h2>
         </div>
         {days.length === 0 && <p class="note">Летопись пуста. Первая запись появится после первой сделанной задачи.</p>}
         {days.map((d) => {
@@ -95,17 +105,18 @@ export function Chronicle({ ui }: { ui: Ui }) {
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">Распорядок</span>
+          <h2 class="sc">Распорядок</h2>
         </div>
         <div class="field-row">
-          <TimeField label="Работа с" value={s.settings.workStart} onChange={(v) => setSetting({ workStart: v })} />
-          <TimeField label="до" value={s.settings.workEnd} onChange={(v) => setSetting({ workEnd: v })} />
-          <TimeField label="Отбой" value={s.settings.bedtime} onChange={(v) => setSetting({ bedtime: v })} />
+          <TimeField label="Работа с" value={s.settings.workStart} onChange={(v) => setTime({ workStart: v })} />
+          <TimeField label="до" value={s.settings.workEnd} onChange={(v) => setTime({ workEnd: v })} />
+          <TimeField label="Отбой" value={s.settings.bedtime} onChange={(v) => setTime({ bedtime: v })} />
         </div>
+        {timeError && <p class="note note-error">{timeError}</p>}
         <div class="field">
           <div class="field-label">Рабочие дни</div>
-          <div class="chips">
-            {WEEK.map((d) => {
+          <div class="chips" role="group" aria-label="Рабочие дни">
+            {WEEKDAY_CHIPS.map(({ value: d, label, sr }) => {
               const on = s.settings.workDays.includes(d);
               return (
                 <button
@@ -114,7 +125,7 @@ export function Chronicle({ ui }: { ui: Ui }) {
                   aria-pressed={on}
                   onClick={() => setSetting({ workDays: on ? s.settings.workDays.filter((x) => x !== d) : [...s.settings.workDays, d] })}
                 >
-                  {WEEK_SHORT[d]}
+                  <ChipText label={label} sr={sr} />
                 </button>
               );
             })}
@@ -124,14 +135,14 @@ export function Chronicle({ ui }: { ui: Ui }) {
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">Сохранение в GitHub</span>
+          <h2 class="sc">Сохранение в GitHub</h2>
         </div>
         <SyncPanel ui={ui} />
       </section>
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">Копия в файл</span>
+          <h2 class="sc">Копия в файл</h2>
         </div>
         <p class="note">Игра хранится в этом браузере. Копия в файле пригодится, чтобы перенести игру без GitHub или просто не потерять.</p>
         <div class="btns">
@@ -149,16 +160,108 @@ export function Chronicle({ ui }: { ui: Ui }) {
         }} />
       </section>
 
-      <section class="group credits">
+      <section class="group">
         <div class="group-head">
-          <span class="sc">Авторы</span>
+          <h2 class="sc">Справка</h2>
         </div>
-        <p class="note">
-          Модели лагеря: KayKit (Kay Lousberg), лицензия CC0. Иконки: game-icons.net (Lorc, Delapouite и другие), лицензия CC BY 3.0. Шрифты Alegreya и Alegreya Sans
-          (Juan Pablo del Peral, Huerta Tipográfica), лицензия SIL OFL.
+        <div class="btns">
+          <button class="btn btn-ghost" onClick={() => ui.open({ kind: 'rules' })}>
+            Правила
+          </button>
+          <button class="btn btn-ghost" onClick={() => ui.open({ kind: 'about' })}>
+            О приложении
+          </button>
+        </div>
+        <p class="note version">
+          Версия {VERSION} от {BUILD}
         </p>
       </section>
+
+      <section class="group">
+        <div class="group-head">
+          <h2 class="sc">Стереть всё</h2>
+        </div>
+        <p class="note">Убрать игру из этого браузера и, если хочешь, её сохранение из GitHub.</p>
+        <div class="actions">
+          <button class="act act-danger" onClick={() => ui.open({ kind: 'wipe' })}>
+            <LIcon name="trash" size={16} />
+            Стереть игру…
+          </button>
+        </div>
+      </section>
     </div>
+  );
+}
+
+/** Стереть игру из браузера, а по желанию и гист с сохранением. Потом страница открывается с чистого листа. */
+export function WipeSheet({ ui }: { ui: Ui }) {
+  const { store, sync } = ui;
+  useSync(sync);
+  const [gist, setGist] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const s = store.state;
+  const played = s.tasks.length > 0 || s.routines.length > 0 || s.hero.xp > 0;
+
+  const wipe = async () => {
+    setBusy(true);
+    setError(null);
+    if (gist && sync.connected) {
+      try {
+        await sync.removeSave();
+      } catch (e) {
+        const why = e instanceof GitHubError ? e.message : 'GitHub не ответил';
+        setError(`Гист не удалился, и игра не стёрта. ${why}${/[.?!]$/.test(why) ? '' : '.'}`);
+        setBusy(false);
+        return;
+      }
+    }
+    sync.disconnect();
+    store.wipe();
+    clearLocal();
+    location.reload();
+  };
+
+  return (
+    <Sheet
+      title="Стереть всё"
+      onClose={ui.close}
+      footer={
+        <div class="btns btns-col">
+          <button class="btn btn-danger" disabled={busy} onClick={() => void wipe()}>
+            {busy ? 'Стираю…' : gist ? 'Стереть игру и гист' : 'Стереть игру'}
+          </button>
+          <button class="btn btn-ghost" onClick={ui.close}>
+            Оставить как есть
+          </button>
+        </div>
+      }
+    >
+      <p class="note">
+        Из этого браузера пропадут задачи, походы, золото, опыт и летопись дней. Отменить это нельзя: вернуть игру можно только из копии в файле или из GitHub.
+      </p>
+      {played && (
+        <div class="btns btns-one">
+          <button class="btn btn-ghost btn-sm" onClick={() => downloadGame(store)}>
+            Сначала сохранить копию в файл
+          </button>
+        </div>
+      )}
+      {sync.connected && (
+        <>
+          <label class="check-row">
+            <input type="checkbox" checked={gist} onChange={() => setGist(!gist)} />
+            <span>Удалить и сохранение в GitHub</span>
+          </label>
+          <p class="note">
+            {gist
+              ? 'Гист с игрой удалится с GitHub навсегда. На других устройствах игра останется, но сохраняться в GitHub перестанет.'
+              : 'Гист с игрой останется на GitHub: если подключить GitHub снова, игра вернётся. Токен на этом устройстве забудется.'}
+          </p>
+        </>
+      )}
+      {error && <p class="note note-error">{error}</p>}
+    </Sheet>
   );
 }
 

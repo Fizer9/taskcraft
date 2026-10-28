@@ -1,4 +1,8 @@
-// Игровые иконки с game-icons.net (CC BY 3.0, авторы Lorc, Delapouite и другие), см. Летопись → «Авторы».
+// Игровые иконки с game-icons.net, лицензия CC BY 3.0 (список с авторами: public/licenses/game-icons.txt,
+// в игре: Летопись → «О приложении»). Откуда каждая:
+//   Lorc: sun, frog, hourglass, campfire, kingdom (castle), scroll (scroll-unfurled), sunrise
+//   Delapouite: coins (two-coins), check (check-mark), zzz (night-sleep), logs (log), sunset
+//   Sbed: skull (death-skull). Zeromancer: heart (heart-plus).
 // Простые контурные иконки ниже нарисованы для этого приложения.
 
 export const GAME_ICONS = {
@@ -37,6 +41,8 @@ export const LINE_ICONS = {
   undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
   edit: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
   moon: 'M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z',
+  repeat: 'M3 11v-1a4 4 0 0 1 4-4h13M17 3l3 3l-3 3M21 13v1a4 4 0 0 1-4 4H4M7 15l-3 3l3 3',
+  cloudAlert: 'M7 19h10.5a4.5 4.5 0 0 0 .6-8.96A6.5 6.5 0 0 0 5.6 9.4A4.8 4.8 0 0 0 7 19zM12 10.5v3.5M12 16.6v.01',
 } as const;
 
 export type LineIcon = keyof typeof LINE_ICONS;

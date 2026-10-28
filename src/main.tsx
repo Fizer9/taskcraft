@@ -8,15 +8,14 @@ import './ui/styles.css';
 import { render } from 'preact';
 import { Store } from './game/store';
 import { Sync } from './sync/sync';
-import { App } from './ui/App';
+import { askPersistentStorage, registerServiceWorker } from './ui/pwa';
+import { Root } from './ui/Root';
 
 const store = new Store();
 const sync = new Sync(store);
-sync.start();
-render(<App store={store} sync={sync} />, document.getElementById('app')!);
+render(<Root store={store} sync={sync} />, document.getElementById('app')!);
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => undefined);
-  });
+if (import.meta.env.PROD) {
+  registerServiceWorker();
+  askPersistentStorage();
 }

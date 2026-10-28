@@ -1,9 +1,10 @@
-// Сохранение в GitHub: подключение по токену, состояние и выбор, когда в GitHub другая игра.
+// Сохранение в GitHub: подключение по токену, состояние, срок и замена токена, выбор, когда
+// в GitHub другая игра, и значок в верхней полосе лагеря, когда сохранение не работает.
 import { useEffect, useState } from 'preact/hooks';
-import { heroLevel } from '../game/rules';
-import { dayKey, formatClock, formatDate, plural } from '../game/time';
+import { HOUR, heroLevel } from '../game/rules';
+import { addDays, dayKey, daysBetween, formatClock, formatDate, formatDayLong, plural } from '../game/time';
 import type { State } from '../game/types';
-import { GitHubError, TOKEN_URL } from '../sync/github';
+import { GitHubError, TOKEN_URL, TOKENS_URL } from '../sync/github';
 import type { Sync } from '../sync/sync';
 import type { Ui } from './App';
 import { Sheet } from './Sheets';
@@ -12,6 +13,38 @@ import { Sheet } from './Sheets';
 export function useSync(sync: Sync): void {
   const [, setN] = useState(0);
   useEffect(() => sync.subscribe(() => setN((n) => n + 1)), [sync]);
+}
+
+/** За сколько дней до конца срока токена игра начинает напоминать. */
+export const TOKEN_WARN_DAYS = 14;
+/** Сколько действия могут ждать записи без сети, прежде чем лагерь об этом скажет. */
+const STALE_AFTER = HOUR;
+
+/** Сколько дней токену осталось; null, если срок неизвестен. */
+export function tokenDaysLeft(sync: Sync, now: number): number | null {
+  const exp = sync.tokenExpiry;
+  return exp ? daysBetween(dayKey(now), exp.day) : null;
+}
+
+/**
+ * Что не так с сохранением в GitHub. error: GitHub отказал или там другая игра, сохранение
+ * стоит. stale: сети нет уже давно, а действия ждут записи (так выглядит и сеть, где GitHub закрыт).
+ */
+export function syncTrouble(sync: Sync, now: number): 'error' | 'stale' | null {
+  const { phase } = sync.status;
+  if (phase === 'error' || phase === 'conflict') return 'error';
+  const since = sync.pendingSince;
+  if (phase === 'offline' && since !== null && now - since > STALE_AFTER) return 'stale';
+  return null;
+}
+
+/** Лист с сохранением в GitHub: открывается значком в лагере и напоминанием о токене. */
+export function SyncSheet({ ui }: { ui: Ui }) {
+  return (
+    <Sheet title="Сохранение в GitHub" onClose={ui.close}>
+      <SyncPanel ui={ui} />
+    </Sheet>
+  );
 }
 
 function when(ts: number, now: number): string {
@@ -75,6 +108,7 @@ export function SyncPanel({ ui }: { ui: Ui }) {
           </button>
         </form>
         {error && <p class="note note-error">{error}</p>}
+        <p class="note">Токен лежит в этом браузере без пароля: подключай GitHub только на своих устройствах.</p>
       </div>
     );
   }
@@ -86,7 +120,7 @@ export function SyncPanel({ ui }: { ui: Ui }) {
       line = 'Сохраняю…';
       break;
     case 'offline':
-      line = 'Нет связи. Игра сохраняется здесь и уйдёт в GitHub, когда появится сеть.';
+      line = 'Нет связи с GitHub';
       break;
     case 'error':
       line = 'Не сохраняется';
@@ -105,7 +139,13 @@ export function SyncPanel({ ui }: { ui: Ui }) {
         <span class="sync-who">GitHub · {st.login}</span>
         <span class="meta">{line}</span>
       </div>
-      {st.phase === 'error' && st.error && <p class="note note-error">{st.error}</p>}
+      {st.phase === 'error' && st.error && st.errorKind !== 'auth' && <p class="note note-error">{st.error}</p>}
+      {st.phase === 'offline' && (
+        <p class="note">
+          Игра сохраняется здесь и уйдёт в GitHub, когда появится связь.
+          {syncTrouble(sync, now) === 'stale' && ' Если сеть есть, а связи всё нет, возможно, эта сеть закрывает GitHub (так бывает в рабочих сетях).'}
+        </p>
+      )}
       <div class="btns">
         {st.phase === 'conflict' ? (
           <button class="btn btn-gold" onClick={() => ui.open({ kind: 'syncConflict' })}>
@@ -125,7 +165,128 @@ export function SyncPanel({ ui }: { ui: Ui }) {
           Отключить
         </button>
       </div>
-      <p class="note">Токен хранится только в этом браузере и в копию сохранения не попадает.</p>
+      <TokenBlock ui={ui} />
+      <p class="note">
+        Токен хранится только в этом браузере и в копию сохранения не попадает. Если устройство потерялось,{' '}
+        <a href={TOKENS_URL} target="_blank" rel="noopener noreferrer">
+          отзови токен на GitHub
+        </a>
+        : гист останется, а токен перестанет работать.
+      </p>
+    </div>
+  );
+}
+
+/** Срок токена: когда он кончится, как указать точный срок и как заменить токен новым. */
+function TokenBlock({ ui }: { ui: Ui }) {
+  const { sync } = ui;
+  const exp = sync.tokenExpiry;
+  const left = tokenDaysLeft(sync, ui.now);
+  const soon = left !== null && left <= TOKEN_WARN_DAYS;
+  const authFailed = sync.status.errorKind === 'auth';
+  const [editing, setEditing] = useState(false);
+  const [day, setDay] = useState(exp?.day ?? addDays(dayKey(ui.now), 366));
+  const [replacing, setReplacing] = useState(false);
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const replace = async (e: Event) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await sync.replaceToken(token);
+      setToken('');
+      setReplacing(false);
+      ui.toast('Токен заменён');
+    } catch (err) {
+      setError(err instanceof GitHubError ? err.message : 'Не получилось заменить токен');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div class="token">
+      {!authFailed && (
+        <div class="token-line">
+          <span>{exp ? `Токен действует ${exp.guessed ? 'примерно ' : ''}до ${formatDayLong(exp.day)}` : 'Срок токена неизвестен'}</span>
+          {!editing && (
+            <button class="link-btn" onClick={() => setEditing(true)}>
+              {exp ? 'изменить срок' : 'указать срок'}
+            </button>
+          )}
+        </div>
+      )}
+      {editing && (
+        <>
+          <form
+            class="sync-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!day) return;
+              sync.setTokenExpiry(day);
+              setEditing(false);
+            }}
+          >
+            <input class="input" type="date" aria-label="Срок токена" value={day} onInput={(e) => setDay(e.currentTarget.value)} />
+            <button class="btn btn-ghost" type="submit" disabled={!day}>
+              Сохранить
+            </button>
+          </form>
+          <p class="note">
+            Точный срок виден на{' '}
+            <a href={TOKENS_URL} target="_blank" rel="noopener noreferrer">
+              странице токенов GitHub
+            </a>
+            , в строке «Expires on». За {TOKEN_WARN_DAYS} дней до конца игра напомнит заменить токен.
+          </p>
+        </>
+      )}
+      {(soon || authFailed) && (
+        <p class={`note${authFailed || left! <= 3 ? ' note-error' : ''}`}>
+          {authFailed
+            ? 'GitHub больше не принимает этот токен: истёк срок или его отозвали. Создай новый и вставь его ниже.'
+            : left! > 0
+              ? `Токен закончится через ${left} ${plural(left!, 'день', 'дня', 'дней')}. Создай новый и вставь его ниже, тогда игра продолжит сохраняться.`
+              : 'Срок токена закончился. Создай новый и вставь его ниже.'}
+        </p>
+      )}
+      {replacing || soon || authFailed ? (
+        <>
+          <p class="note">
+            <a href={TOKEN_URL} target="_blank" rel="noopener noreferrer">
+              Создай новый токен
+            </a>{' '}
+            на том же аккаунте GitHub ({sync.status.login}): название, срок и право уже выбраны, внизу нажми «Generate token». Старый можно потом удалить на{' '}
+            <a href={TOKENS_URL} target="_blank" rel="noopener noreferrer">
+              странице токенов
+            </a>
+            .
+          </p>
+          <form class="sync-form" onSubmit={replace}>
+            <input
+              class="input"
+              type="password"
+              autocomplete="off"
+              spellcheck={false}
+              placeholder="github_pat_…"
+              aria-label="Новый токен GitHub"
+              value={token}
+              onInput={(e) => setToken(e.currentTarget.value)}
+            />
+            <button class="btn btn-gold" type="submit" disabled={busy || !token.trim()}>
+              {busy ? 'Проверяю…' : 'Заменить'}
+            </button>
+          </form>
+          {error && <p class="note note-error">{error}</p>}
+        </>
+      ) : (
+        <button class="link-btn" onClick={() => setReplacing(true)}>
+          Заменить токен
+        </button>
+      )}
     </div>
   );
 }
@@ -160,7 +321,7 @@ export function SyncConflictSheet({ ui }: { ui: Ui }) {
             Взять игру из GitHub
           </button>
           <button class="btn btn-ghost" onClick={() => void pick('local')}>
-            Записать в GitHub эту
+            Записать в GitHub игру отсюда
           </button>
           <button class="link-btn" onClick={() => void pick('cancel')}>
             Не подключать GitHub

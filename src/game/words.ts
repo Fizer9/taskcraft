@@ -1,7 +1,7 @@
 // Все слова мира в одном месте: экраны берут названия только отсюда.
 import type { UndeadRank } from './rules';
 import type { Shift } from './time';
-import type { Level, QuestColor, QuestKind } from './types';
+import type { Level, QuestColor, QuestKind, Repeat } from './types';
 
 export type ClassId = 'rogue' | 'barbarian' | 'mage' | 'knight';
 
@@ -59,6 +59,28 @@ export const QUEST_COLOR_NAME: Record<QuestColor, string> = {
   brown: 'бурое',
 };
 
+/** Дни недели для выбора, с понедельника. value: номер дня, 0 воскресенье; sr: как день прочтёт экранный диктор. */
+export const WEEKDAY_CHIPS: { value: number; label: string; sr: string }[] = [
+  { value: 1, label: 'Пн', sr: 'понедельник' },
+  { value: 2, label: 'Вт', sr: 'вторник' },
+  { value: 3, label: 'Ср', sr: 'среда' },
+  { value: 4, label: 'Чт', sr: 'четверг' },
+  { value: 5, label: 'Пт', sr: 'пятница' },
+  { value: 6, label: 'Сб', sr: 'суббота' },
+  { value: 0, label: 'Вс', sr: 'воскресенье' },
+];
+
+const ON_WEEKDAY = ['по воскресеньям', 'по понедельникам', 'по вторникам', 'по средам', 'по четвергам', 'по пятницам', 'по субботам'];
+/** «в среду»: когда задача придёт в следующий раз. */
+export const IN_WEEKDAY = ['в воскресенье', 'в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу', 'в субботу'];
+
+/** «каждый день», «по рабочим дням», «по средам». */
+export function repeatName(r: Repeat): string {
+  if (r.every === 'day') return 'каждый день';
+  if (r.every === 'workday') return 'по рабочим дням';
+  return ON_WEEKDAY[r.weekday];
+}
+
 export const SHIFT_NAME: Record<Shift, string> = {
   morning: 'Утро',
   work: 'День',
@@ -76,7 +98,7 @@ export const W = {
   gold: 'Золото',
   mana: 'Мана',
   xp: 'опыт',
-  nowAtFire: 'Сейчас у костра',
+  nowAtFire: 'Сейчас у огня',
   atFireEmpty: 'У огня пусто',
   moreToday: 'Ещё сегодня',
   evening: 'Вечером',
@@ -94,7 +116,7 @@ export const W = {
   lightFire: 'Разжечь костёр',
   lightsOut: 'Отбой',
   notSleeping: 'Ещё не сплю',
-  keepAtFire: 'Оставить у огня на завтра',
+  keepAtFire: 'Оставить у костра на завтра',
   lair: 'логово',
   trophies: 'Зал трофеев',
   inbox: 'Письма',

@@ -1,9 +1,9 @@
 // Сбор отряда: утренний план дня. Кого позвать к костру, кто лягушка, хватит ли сил.
-import { MANA_DRAIN_PER_HOUR, PLAN_XP_PER_TASK, estimateOf } from '../game/rules';
-import { backlogOf, findQuest, inboxOf, isUndead, lightFire, moveInPlan, planOf, planTask } from '../game/state';
-import { formatClock, formatDate, formatDuration, isMainFor, shiftAt } from '../game/time';
+import { MANA_DRAIN_PER_HOUR, MANA_MAX, PLAN_XP_PER_TASK, estimateOf } from '../game/rules';
+import { backlogOf, findQuest, inboxOf, isUndead, lightFire, planOf, planTask, swapInPlan, waitingOf } from '../game/state';
+import { formatClock, formatDate, formatDuration, isMainFor, plural, shiftAt } from '../game/time';
 import type { State, Task } from '../game/types';
-import { W } from '../game/words';
+import { W, repeatName } from '../game/words';
 import type { Ui } from './App';
 import { GIcon, LIcon } from './Icon';
 import { QuestDot, TaskMeta } from './parts';
@@ -48,14 +48,15 @@ export function Plan({ ui }: { ui: Ui }) {
         {mana >= 95 ? 'Долгий отдых позади, силы полны' : `Сил осталось на ~${formatDuration(canMin)}`}
         <span class="chip chip-mana chip-inline">
           <span class="mana-gem" aria-hidden="true" />
-          {mana}
+          <span aria-hidden="true">{mana}</span>
+          <span class="sr-only">{`${W.mana}: ${mana} из ${MANA_MAX}`}</span>
         </span>
       </div>
 
       {letters > 0 && (
         <button class="banner" onClick={() => ui.open({ kind: 'letters' })}>
           <LIcon name="envelope" size={16} />
-          Вестник принёс {letters} {letters === 1 ? 'письмо' : letters < 5 ? 'письма' : 'писем'}: разобрать
+          Вестник принёс {letters} {plural(letters, 'письмо', 'письма', 'писем')}: разобрать
           <LIcon name="chevron" size={16} />
         </button>
       )}
@@ -67,7 +68,7 @@ export function Plan({ ui }: { ui: Ui }) {
           {frog ? (
             <>
               <span class="frog-title">{frog.title}</span>
-              <span class="frog-sub">Сделаешь первой из серьёзных: опыт ×2</span>
+              <span class="frog-sub">Опыт ×2. Лучше браться за неё первой</span>
             </>
           ) : (
             <span class="frog-sub">Выбери самую тяжёлую задачу дня: опыт за неё удвоится</span>
@@ -78,9 +79,9 @@ export function Plan({ ui }: { ui: Ui }) {
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">К костру сегодня</span>
+          <h2 class="sc">К костру сегодня</h2>
           <span class="group-meta">
-            {open.length} {open.length === 1 ? 'задача' : open.length < 5 && open.length > 0 ? 'задачи' : 'задач'}
+            {open.length} {plural(open.length, 'задача', 'задачи', 'задач')}
             {planMin > 0 && ` · ~${formatDuration(planMin)}`}
           </span>
         </div>
@@ -90,14 +91,14 @@ export function Plan({ ui }: { ui: Ui }) {
               <span style={{ width: `${Math.min(100, (planMin / Math.max(canMin, 1)) * 100)}%` }} />
             </span>
             <span>
-              план ~{formatDuration(planMin)}, сил хватит на ~{formatDuration(canMin)}
-              {tooMuch && '. Многовато, кого-то стоит оставить на завтра'}
+              План на ~{formatDuration(planMin)}, а сил хватит на ~{formatDuration(canMin)}
+              {tooMuch && '. Многовато: кого-то стоит оставить на завтра'}
             </span>
           </div>
         )}
         {dayTasks.length === 0 && eveningTasks.length === 0 && <p class="note">Пока никого. Позови задачи из отряда ниже или добавь новую.</p>}
         {dayTasks.map((t, i) => (
-          <PlanRow key={t.id} ui={ui} s={s} t={t} first={i === 0} last={i === dayTasks.length - 1} />
+          <PlanRow key={t.id} ui={ui} s={s} t={t} prev={dayTasks[i - 1]} next={dayTasks[i + 1]} />
         ))}
         {done > 0 && (
           <div class="done-line">
@@ -110,10 +111,10 @@ export function Plan({ ui }: { ui: Ui }) {
       {eveningTasks.length > 0 && (
         <section class="group">
           <div class="group-head">
-            <span class="sc">После заката</span>
+            <h2 class="sc">После заката</h2>
           </div>
           {eveningTasks.map((t, i) => (
-            <PlanRow key={t.id} ui={ui} s={s} t={t} first={i === 0} last={i === eveningTasks.length - 1} />
+            <PlanRow key={t.id} ui={ui} s={s} t={t} prev={eveningTasks[i - 1]} next={eveningTasks[i + 1]} />
           ))}
         </section>
       )}
@@ -121,7 +122,7 @@ export function Plan({ ui }: { ui: Ui }) {
       {undead.length > 0 && (
         <section class="group">
           <div class="group-head">
-            <span class="sc">{W.undead}</span>
+            <h2 class="sc">{W.undead}</h2>
             <span class="group-meta">просроченные задачи</span>
           </div>
           {undead.map((t) => (
@@ -132,13 +133,17 @@ export function Plan({ ui }: { ui: Ui }) {
 
       <section class="group">
         <div class="group-head">
-          <span class="sc">Из отряда</span>
-          <button class="link-btn" onClick={() => ui.open({ kind: 'add', day: null })}>
+          <h2 class="sc">Из отряда</h2>
+          <button class="link-btn" aria-label="Новая задача" onClick={() => ui.open({ kind: 'add', day: null })}>
             <LIcon name="plus" size={15} />
             новая
           </button>
         </div>
-        {rest.length === 0 && <p class="note">В отряде никого, кроме уже позванных.</p>}
+        {rest.length === 0 && (
+          <p class="note">
+            {s.tasks.some((t) => t.status === 'open' || t.status === 'inbox') ? 'В отряде никого, кроме уже позванных.' : 'Отряд пуст. Добавь первую задачу: кнопка «+ новая» выше или большой «+» внизу.'}
+          </p>
+        )}
         {groupByQuest(s, rest).map(([qid, tasks]) => {
           const q = findQuest(s, qid);
           return (
@@ -154,6 +159,28 @@ export function Plan({ ui }: { ui: Ui }) {
           );
         })}
       </section>
+
+      {s.routines.length > 0 && (
+        <section class="group">
+          <div class="group-head">
+            <h2 class="sc">Повторяются</h2>
+            <span class="group-meta">приходят к костру сами</span>
+          </div>
+          {s.routines.map((r) => {
+            const w = waitingOf(s, r.id);
+            return (
+              <button key={r.id} class="row" onClick={() => ui.open(w ? { kind: 'edit', taskId: w.id } : { kind: 'routine', routineId: r.id })}>
+                <LIcon name="repeat" size={15} class="ic-gold" />
+                <span class="row-title">{r.title}</span>
+                <span class="meta">
+                  {repeatName(r.repeat)}
+                  {r.at && `, в ${r.at}`}
+                </span>
+              </button>
+            );
+          })}
+        </section>
+      )}
 
       <div class="page-foot">
         {lit ? (
@@ -190,7 +217,26 @@ function groupByQuest(s: State, tasks: Task[]): [string | null, Task[]][] {
   return [...groups.entries()].sort((a, b) => (order.get(a[0] ?? '') ?? 99) - (order.get(b[0] ?? '') ?? 99));
 }
 
-function PlanRow({ ui, s, t, first, last }: { ui: Ui; s: State; t: Task; first: boolean; last: boolean }) {
+/**
+ * Строка плана уезжает выше, ниже или уходит из списка, и браузер теряет фокус.
+ * Вернуть его на ту же кнопку, на другую кнопку строки или на соседнюю строку, чтобы с клавиатуры и с экранным диктором не начинать с начала страницы.
+ */
+function keepFocus(e: Event, act: () => void) {
+  const btn = e.currentTarget as HTMLButtonElement;
+  const row = btn.closest('.prow');
+  const near = [row?.nextElementSibling, row?.previousElementSibling].map((r) => r?.querySelector<HTMLElement>('.prow-main') ?? null);
+  const section = btn.closest('section');
+  act();
+  requestAnimationFrame(() => {
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const same = btn.isConnected && !btn.disabled ? btn : null;
+    const other = row?.isConnected ? row.querySelector<HTMLElement>('.icon-btn:not(:disabled)') : null;
+    const inSection = section?.isConnected ? section.querySelector<HTMLElement>('.prow-main, .link-btn') : null;
+    [same, other, ...near, inSection].find((el) => el?.isConnected)?.focus();
+  });
+}
+
+function PlanRow({ ui, s, t, prev, next }: { ui: Ui; s: State; t: Task; prev?: Task; next?: Task }) {
   return (
     <div class="prow">
       <button class="prow-main" onClick={() => ui.open({ kind: 'task', taskId: t.id })}>
@@ -198,13 +244,13 @@ function PlanRow({ ui, s, t, first, last }: { ui: Ui; s: State; t: Task; first: 
         <span class="row-title">{t.title}</span>
         <TaskMeta s={s} t={t} estimate />
       </button>
-      <button class="icon-btn" aria-label="Выше" disabled={first} onClick={() => ui.store.act((st) => moveInPlan(st, t.id, -1))}>
+      <button class="icon-btn" aria-label={`Выше: ${t.title}`} disabled={!prev} onClick={(e) => keepFocus(e, () => ui.store.act((st) => prev && swapInPlan(st, t.id, prev.id)))}>
         <LIcon name="up" size={16} />
       </button>
-      <button class="icon-btn" aria-label="Ниже" disabled={last} onClick={() => ui.store.act((st) => moveInPlan(st, t.id, 1))}>
+      <button class="icon-btn" aria-label={`Ниже: ${t.title}`} disabled={!next} onClick={(e) => keepFocus(e, () => ui.store.act((st) => next && swapInPlan(st, t.id, next.id)))}>
         <LIcon name="down" size={16} />
       </button>
-      <button class="icon-btn" aria-label={`Не сегодня: ${t.title}`} onClick={() => ui.store.act((st) => planTask(st, t.id, null))}>
+      <button class="icon-btn" aria-label={`Не сегодня: ${t.title}`} onClick={(e) => keepFocus(e, () => ui.store.act((st) => planTask(st, t.id, null)))}>
         <LIcon name="close" size={16} />
       </button>
     </div>
@@ -218,7 +264,7 @@ function AddRow({ ui, s, t }: { ui: Ui; s: State; t: Task }) {
         <span class="row-title">{t.title}</span>
         <TaskMeta s={s} t={t} />
       </button>
-      <button class="icon-btn icon-btn-gold" aria-label={`К костру сегодня: ${t.title}`} onClick={() => ui.store.act((st) => planTask(st, t.id, st.day))}>
+      <button class="icon-btn icon-btn-gold" aria-label={`К костру сегодня: ${t.title}`} onClick={(e) => keepFocus(e, () => ui.store.act((st) => planTask(st, t.id, st.day)))}>
         <LIcon name="plus" size={18} stroke={2.4} />
       </button>
     </div>
