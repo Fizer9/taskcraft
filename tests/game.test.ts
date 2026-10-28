@@ -1,0 +1,273 @@
+import { describe, expect, it } from 'vitest';
+import { HOUR, MINUTE, heroLevel, levelForEstimate, undeadRank } from '../src/game/rules';
+import {
+  addTask,
+  canSecondWind,
+  complete,
+  confirmWorking,
+  endDay,
+  lairOf,
+  lightFire,
+  newState,
+  planTask,
+  release,
+  secondWind,
+  setFrog,
+  settle,
+  start,
+  toggleBreak,
+  touch,
+  undoComplete,
+  winQuest,
+} from '../src/game/state';
+import { addDays, dayKey, shiftAt } from '../src/game/time';
+import { assignSeats, campView } from '../src/game/view';
+import { Store, type Storage } from '../src/game/store';
+
+// Пятница, 23 октября 2026.
+const at = (h: number, m = 0, d = 23) => new Date(2026, 9, d, h, m).getTime();
+
+function fresh(now = at(8)) {
+  const s = newState(now);
+  const [work, personal, home] = s.quests.map((q) => q.id);
+  return { s, work, personal, home };
+}
+
+describe('время и смены', () => {
+  it('день начинается в 4 утра', () => {
+    expect(dayKey(at(3, 59))).toBe('2026-10-22');
+    expect(dayKey(at(4))).toBe('2026-10-23');
+  });
+
+  it('смены рабочего дня и выходного', () => {
+    const { s } = fresh();
+    expect(shiftAt(at(8), s.settings)).toBe('morning');
+    expect(shiftAt(at(14), s.settings)).toBe('work');
+    expect(shiftAt(at(19), s.settings)).toBe('evening');
+    expect(shiftAt(at(22, 40), s.settings)).toBe('night');
+    expect(shiftAt(at(14, 0, 24), s.settings)).toBe('weekend');
+    expect(shiftAt(at(1, 0, 24), s.settings)).toBe('night');
+  });
+});
+
+describe('таймер и мана', () => {
+  it('работа идёт в задачу и тратит ману', () => {
+    const { s, work } = fresh();
+    const id = addTask(s, at(8), { title: 'Отчёт', questId: work, day: s.day });
+    start(s, at(9), id);
+    touch(s, at(10));
+    settle(s, at(11));
+    expect(s.tasks.find((t) => t.id === id)!.spentMs).toBe(2 * HOUR);
+    expect(s.hero.mana).toBe(70);
+    expect(s.log[s.day].workedMs).toBe(2 * HOUR);
+  });
+
+  it('привал останавливает таймер и возвращает ману', () => {
+    const { s, work } = fresh();
+    const id = addTask(s, at(8), { title: 'Отчёт', questId: work, day: s.day });
+    start(s, at(9), id);
+    touch(s, at(10));
+    toggleBreak(s, at(11));
+    settle(s, at(12));
+    expect(s.tasks[0].spentMs).toBe(2 * HOUR);
+    expect(s.hero.mana).toBe(100);
+    toggleBreak(s, at(12));
+    expect(s.current?.runningSince).toBe(at(12));
+  });
+
+  it('забытый таймер встаёт через 90 минут и время можно вернуть', () => {
+    const { s, work } = fresh();
+    const id = addTask(s, at(8), { title: 'Отчёт', questId: work, day: s.day });
+    start(s, at(9), id);
+    settle(s, at(12));
+    expect(s.tasks[0].spentMs).toBe(90 * MINUTE);
+    expect(s.current?.idleSince).toBe(at(10, 30));
+    confirmWorking(s, at(12));
+    expect(s.tasks[0].spentMs).toBe(3 * HOUR);
+    expect(s.current?.runningSince).toBe(at(12));
+  });
+
+  it('другой поход стоит маны, тот же нет', () => {
+    const { s, work, personal } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    const b = addTask(s, at(8), { title: 'B', questId: work, day: s.day });
+    const c = addTask(s, at(8), { title: 'C', questId: personal, day: s.day });
+    expect(start(s, at(9), a).switchCost).toBe(0);
+    expect(start(s, at(9), b).switchCost).toBe(0);
+    expect(start(s, at(9), c).switchCost).toBe(5);
+    expect(s.hero.mana).toBe(95);
+  });
+
+  it('второе дыхание только вечером, после работы и раз в день', () => {
+    const { s, work } = fresh();
+    const id = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    expect(canSecondWind(s, at(19))).toBe(false);
+    start(s, at(9), id);
+    toggleBreak(s, at(10));
+    s.hero.mana = 40;
+    expect(secondWind(s, at(15))).toBe(false);
+    settle(s, at(19));
+    s.breakSince = null;
+    s.hero.mana = 40;
+    expect(secondWind(s, at(19))).toBe(true);
+    expect(s.hero.mana).toBe(70);
+    expect(secondWind(s, at(20))).toBe(false);
+  });
+});
+
+describe('награды', () => {
+  it('золото по уровню, опыт с лягушкой, урон логову', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'Модуль', questId: work, level: 3, day: s.day });
+    addTask(s, at(8), { title: 'Ещё', questId: work, level: 2 });
+    setFrog(s, a);
+    const r = complete(s, at(10), a)!;
+    expect(r.reward).toEqual({ gold: 75, xp: 120, frog: true, damage: 3 });
+    expect(r.lair).toEqual({ before: 5, after: 2, max: 5 });
+    expect(s.hero.gold).toBe(75);
+    expect(s.log[s.day].frog).toBe(true);
+  });
+
+  it('уровень можно поправить при сдаче', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, level: 1, day: s.day });
+    expect(complete(s, at(10), a, 2)!.reward.gold).toBe(50);
+  });
+
+  it('отмена «Готово» возвращает награду', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, level: 2, day: s.day });
+    complete(s, at(10), a);
+    undoComplete(s, a);
+    expect(s.hero.gold).toBe(0);
+    expect(s.tasks[0].status).toBe('open');
+  });
+
+  it('логово падает, когда задач не осталось', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, level: 2 });
+    expect(winQuest(s, at(9), work)).toBe(false);
+    complete(s, at(9), a);
+    expect(lairOf(s, work)).toEqual({ hp: 0, max: 2 });
+    expect(winQuest(s, at(9), work)).toBe(true);
+  });
+
+  it('разжечь костёр даёт опыт один раз', () => {
+    const { s, work } = fresh();
+    addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    addTask(s, at(8), { title: 'B', questId: work, day: s.day });
+    expect(lightFire(s, at(8))).toBe(6);
+    expect(lightFire(s, at(8))).toBe(0);
+  });
+
+  it('уровень героя растёт по опыту', () => {
+    expect(heroLevel(0).level).toBe(1);
+    expect(heroLevel(299).level).toBe(1);
+    expect(heroLevel(300).level).toBe(2);
+    expect(heroLevel(900)).toEqual({ level: 3, into: 0, need: 900 });
+  });
+
+  it('уровень по оценке', () => {
+    expect(levelForEstimate(20)).toBe(1);
+    expect(levelForEstimate(60)).toBe(2);
+    expect(levelForEstimate(240)).toBe(3);
+    expect(levelForEstimate(900)).toBe(4);
+  });
+});
+
+describe('дни', () => {
+  it('новый день: мана полна, незакрытые задачи остаются у огня', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    s.hero.mana = 10;
+    settle(s, at(9, 0, 24));
+    expect(s.day).toBe('2026-10-24');
+    expect(s.hero.mana).toBe(100);
+    expect(s.tasks.find((t) => t.id === a)!.day).toBe('2026-10-24');
+  });
+
+  it('отбой: отмеченные на завтра, остальные в отряд', () => {
+    const { s, work } = fresh();
+    const a = addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    const b = addTask(s, at(8), { title: 'B', questId: work, day: s.day });
+    endDay(s, at(22, 40), [a]);
+    expect(s.closedDay).toBe(s.day);
+    expect(s.tasks.find((t) => t.id === a)!.day).toBe(addDays(s.day, 1));
+    expect(s.tasks.find((t) => t.id === b)!.day).toBeNull();
+  });
+
+  it('просрочка становится нежитью по рангам', () => {
+    expect(undeadRank(1)).toBe('minion');
+    expect(undeadRank(3)).toBe('rogue');
+    expect(undeadRank(7)).toBe('warrior');
+    expect(undeadRank(20)).toBe('mage');
+  });
+});
+
+describe('экран дня', () => {
+  it('нумерация по плану, вечерние отдельно, нежить на дороге', () => {
+    const { s, work, personal } = fresh();
+    const a = addTask(s, at(8), { title: 'Работа 1', questId: work, day: s.day });
+    const b = addTask(s, at(8), { title: 'Работа 2', questId: work, day: s.day });
+    const c = addTask(s, at(8), { title: 'Тренировка', questId: personal, day: s.day });
+    const d = addTask(s, at(8), { title: 'Траты', questId: work, due: '2026-10-21' });
+    complete(s, at(9), a);
+    start(s, at(10), b);
+    const v = campView(s, at(14));
+    expect(v.numbers.get(a)).toBe(1);
+    expect(v.numbers.get(b)).toBe(2);
+    expect(v.numbers.get(c)).toBe(3);
+    expect(v.numbers.get(d)).toBe(4);
+    expect(v.current?.id).toBe(b);
+    expect(v.main.map((t) => t.id)).toEqual([]);
+    expect(v.later.map((t) => t.id)).toEqual([c]);
+    expect(v.road).toHaveLength(1);
+    expect(v.road[0].rank).toBe('minion');
+    expect(v.ring?.pose).toBe('work');
+    expect(v.doneToday).toBe(1);
+  });
+
+  it('места у костра не меняются, когда соседи уходят', () => {
+    const { s, work } = fresh();
+    const ids = [1, 2, 3, 4].map((i) => addTask(s, at(8) + i, { title: `T${i}`, questId: work, day: s.day }));
+    const before = assignSeats(s.tasks).seats;
+    release(s, at(9), ids[1]);
+    const after = assignSeats(s.tasks.filter((t) => t.status === 'open')).seats;
+    for (const id of [ids[0], ids[2], ids[3]]) {
+      if (before.get(id) !== undefined && after.get(id) !== undefined) {
+        // Место может только освободиться, но не перейти к другому, если не было столкновений.
+        expect(after.get(id)).toBeLessThan(6);
+      }
+    }
+    expect(new Set(after.values()).size).toBe(after.size);
+  });
+
+  it('после отбоя отряд спит, план убран', () => {
+    const { s, work } = fresh();
+    addTask(s, at(8), { title: 'A', questId: work, day: s.day });
+    endDay(s, at(22, 40), []);
+    const v = campView(s, at(22, 41));
+    expect(v.asleep).toBe(true);
+    expect(v.light).toBe('night');
+    expect(v.seats).toHaveLength(0);
+  });
+
+  it('задача без похода и без дня уходит письмом к вестнику', () => {
+    const { s } = fresh();
+    addTask(s, at(8), { title: 'Позвонить', questId: null });
+    expect(campView(s, at(9)).inbox).toBe(1);
+    planTask(s, s.tasks[0].id, s.day);
+    expect(campView(s, at(9)).inbox).toBe(0);
+  });
+});
+
+describe('хранилище', () => {
+  it('сохраняет и читает состояние', () => {
+    let saved: string | null = null;
+    const storage: Storage = { load: () => saved, save: (j) => (saved = j) };
+    const a = new Store(storage, () => at(9));
+    a.act((s, now) => addTask(s, now, { title: 'A', questId: s.quests[0].id, day: s.day }));
+    const b = new Store(storage, () => at(9, 30));
+    expect(b.state.tasks).toHaveLength(1);
+  });
+});

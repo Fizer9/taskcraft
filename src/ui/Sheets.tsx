@@ -1,0 +1,560 @@
+// Листы поверх экрана: новая задача, карточка задачи, письма, поход, итоги дня.
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { ESTIMATE_BY_LEVEL, SWITCH_COST, estimateOf, levelForEstimate } from '../game/rules';
+import {
+  addQuest,
+  addTask,
+  daysOverdue,
+  endDay,
+  findQuest,
+  findTask,
+  inboxOf,
+  isUndead,
+  lairOf,
+  planOf,
+  planTask,
+  release,
+  removeQuest,
+  setFrog,
+  spentNow,
+  updateQuest,
+  updateTask,
+  winQuest,
+} from '../game/state';
+import { addDays, formatDue, formatDuration } from '../game/time';
+import type { DayKey, Level, QuestColor, QuestKind, State, Task } from '../game/types';
+import { undeadRank } from '../game/rules';
+import {
+  CLASS_BY_LEVEL,
+  CLASS_NAME,
+  LEVEL_HINT,
+  LEVEL_ROMAN,
+  QUEST_KIND_HINT,
+  QUEST_KIND_NAME,
+  UNDEAD_NAME,
+  W,
+} from '../game/words';
+import type { Ui } from './App';
+import { CallLabel, callToFire, finish } from './Camp';
+import { GIcon, LIcon } from './Icon';
+import { Chips, QuestDot, TaskMeta, questName } from './parts';
+import { SyncConflictSheet } from './SyncPanel';
+
+export type SheetState =
+  | { kind: 'add'; questId?: string | null; day?: DayKey | null }
+  | { kind: 'edit'; taskId: string }
+  | { kind: 'task'; taskId: string }
+  | { kind: 'summary' }
+  | { kind: 'letters' }
+  | { kind: 'quest'; questId: string }
+  | { kind: 'newQuest' }
+  | { kind: 'editQuest'; questId: string }
+  | { kind: 'frog' }
+  | { kind: 'syncConflict' };
+
+export function Sheets({ ui, sheet }: { ui: Ui; sheet: SheetState }) {
+  switch (sheet.kind) {
+    case 'add':
+      return <TaskForm ui={ui} preset={sheet} />;
+    case 'edit':
+      return <TaskForm ui={ui} taskId={sheet.taskId} />;
+    case 'task':
+      return <TaskSheet ui={ui} taskId={sheet.taskId} />;
+    case 'summary':
+      return <SummarySheet ui={ui} />;
+    case 'letters':
+      return <LettersSheet ui={ui} />;
+    case 'quest':
+      return <QuestSheet ui={ui} questId={sheet.questId} />;
+    case 'newQuest':
+      return <QuestForm ui={ui} />;
+    case 'editQuest':
+      return <QuestForm ui={ui} questId={sheet.questId} />;
+    case 'frog':
+      return <FrogSheet ui={ui} />;
+    case 'syncConflict':
+      return <SyncConflictSheet ui={ui} />;
+  }
+}
+
+export function Sheet(p: { title: string; onClose: () => void; children: preact.ComponentChildren; footer?: preact.ComponentChildren }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') p.onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [p.onClose]);
+  return (
+    <div class="overlay" onClick={(e) => e.target === e.currentTarget && p.onClose()}>
+      <div class="modal" role="dialog" aria-modal="true" aria-label={p.title} ref={ref}>
+        <div class="modal-head">
+          <h2>{p.title}</h2>
+          <button class="icon-btn" aria-label="Закрыть" onClick={p.onClose}>
+            <LIcon name="close" size={20} />
+          </button>
+        </div>
+        <div class="modal-body">{p.children}</div>
+        {p.footer && <div class="modal-foot">{p.footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---------- новая задача и правка ----------
+
+const ESTIMATES: { value: number | null; label: string }[] = [
+  { value: 15, label: '15 мин' },
+  { value: 30, label: '30 мин' },
+  { value: 60, label: '1 ч' },
+  { value: 120, label: '2 ч' },
+  { value: 240, label: '4 ч' },
+  { value: 480, label: 'день' },
+  { value: null, label: 'дни' },
+];
+
+function TaskForm({ ui, preset, taskId }: { ui: Ui; preset?: { questId?: string | null; day?: DayKey | null }; taskId?: string }) {
+  const s = ui.store.state;
+  const editing = taskId ? findTask(s, taskId) : undefined;
+  const quests = s.quests.filter((q) => !q.wonAt);
+  const [title, setTitle] = useState(editing?.title ?? '');
+  const [questId, setQuestId] = useState<string | null>(editing ? editing.questId : preset?.questId ?? null);
+  const [estimate, setEstimate] = useState<number | null>(editing ? estimateOf(editing) : 30);
+  const [level, setLevel] = useState<Level>(editing?.level ?? 1);
+  const [levelTouched, setLevelTouched] = useState(!!editing);
+  const [day, setDay] = useState<DayKey | null>(editing ? editing.day : preset?.day !== undefined ? preset.day : s.day);
+  const [due, setDue] = useState<DayKey | null>(editing?.due ?? null);
+  const [at, setAt] = useState<string>(editing?.at ?? '');
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
+
+  const autoLevel: Level = estimate === null ? 4 : levelForEstimate(estimate);
+  const lvl = levelTouched ? level : autoLevel;
+  const tomorrow = addDays(s.day, 1);
+  const willBeLetter = !questId && !day;
+
+  const save = (e?: Event) => {
+    e?.preventDefault();
+    if (!title.trim()) {
+      input.current?.focus();
+      return;
+    }
+    const patch = {
+      title: title.trim(),
+      questId,
+      level: lvl,
+      estimateMin: estimate === ESTIMATE_BY_LEVEL[lvl] ? null : estimate,
+      day,
+      due,
+      at: at || null,
+    };
+    if (editing) {
+      ui.store.act((st) => {
+        updateTask(st, editing.id, patch);
+        if (patch.day !== editing.day) planTask(st, editing.id, patch.day);
+      });
+      ui.close();
+      return;
+    }
+    ui.store.act((st, now) => addTask(st, now, patch));
+    ui.toast(willBeLetter ? 'Письмо у вестника: разберёшь в сборе отряда' : `${CLASS_NAME[CLASS_BY_LEVEL[lvl]]} в отряде`);
+    ui.close();
+  };
+
+  return (
+    <Sheet
+      title={editing ? 'Задача' : 'Новая задача'}
+      onClose={ui.close}
+      footer={
+        <button class="btn btn-gold btn-wide" onClick={save}>
+          {editing ? 'Сохранить' : willBeLetter ? 'Отдать вестнику' : 'Взять в отряд'}
+        </button>
+      }
+    >
+      <form onSubmit={save}>
+        <label class="field">
+          <span class="field-label">Что сделать</span>
+          <input ref={input} class="input" value={title} onInput={(e) => setTitle(e.currentTarget.value)} placeholder="Например, сдать модуль React" maxLength={140} enterKeyHint="done" />
+        </label>
+      </form>
+      <Chips
+        label={W.quest}
+        value={questId}
+        options={[...quests.map((q) => ({ value: q.id as string | null, label: q.name })), { value: null, label: 'Без похода' }]}
+        onChange={setQuestId}
+      />
+      <Chips label="Сколько займёт" value={estimate} options={ESTIMATES} onChange={(v) => { setEstimate(v); setLevelTouched(false); }} />
+      <Chips
+        label={`Уровень: ${CLASS_NAME[CLASS_BY_LEVEL[lvl]].toLowerCase()}, ${LEVEL_HINT[lvl]}`}
+        value={lvl}
+        options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l] }))}
+        onChange={(l) => { setLevel(l); setLevelTouched(true); }}
+      />
+      <Chips
+        label="Когда к костру"
+        value={day}
+        options={[
+          { value: s.day, label: 'Сегодня' },
+          { value: tomorrow, label: 'Завтра' },
+          { value: null, label: 'Потом' },
+          ...(day && day !== s.day && day !== tomorrow ? [{ value: day, label: formatDue(day, s.day) }] : []),
+        ]}
+        onChange={setDay}
+      />
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Срок</span>
+          <input class="input" type="date" value={due ?? ''} onInput={(e) => setDue(e.currentTarget.value || null)} />
+        </label>
+        <label class="field">
+          <span class="field-label">Время</span>
+          <input class="input" type="time" value={at} onInput={(e) => setAt(e.currentTarget.value)} />
+        </label>
+      </div>
+      {willBeLetter && <p class="note">Без похода и без дня задача уходит письмом к вестнику. Разобрать письма можно в сборе отряда.</p>}
+    </Sheet>
+  );
+}
+
+// ---------- карточка задачи ----------
+
+function TaskSheet({ ui, taskId }: { ui: Ui; taskId: string }) {
+  const s = ui.store.state;
+  const t = findTask(s, taskId);
+  const [level, setLevel] = useState<Level | null>(null);
+  if (!t) return null;
+  const q = findQuest(s, t.questId);
+  const cls = CLASS_BY_LEVEL[t.level];
+  const undead = isUndead(t, s.day);
+  const isCurrent = s.current?.taskId === t.id;
+  const inToday = t.day === s.day;
+  const est = estimateOf(t);
+  const spent = spentNow(s, t, ui.now);
+  const switchCost = s.lastQuestId !== null && t.questId !== s.lastQuestId && !isCurrent ? SWITCH_COST : 0;
+  const done = t.status === 'done';
+
+  const close = ui.close;
+  return (
+    <Sheet title={undead ? UNDEAD_NAME[undeadRank(daysOverdue(t, s.day))] : CLASS_NAME[cls]} onClose={close}>
+      <div class="task-head">
+        <div class="task-title">{t.title}</div>
+        <div class="task-sub">
+          <QuestDot q={q} />
+          {questName(s, t)} · {LEVEL_ROMAN[t.level]} уровень · {est ? `~${formatDuration(est)}` : 'несколько дней'}
+        </div>
+        <div class="task-facts">
+          {spent > 0 && <span>Потрачено {formatDuration(Math.max(1, Math.round(spent / 60_000)))}</span>}
+          {t.due && <span class={undead ? 'meta-undead' : ''}>Срок: {formatDue(t.due, s.day)}</span>}
+          {t.at && <span>В {t.at}</span>}
+          {done && t.reward && <span>Сделано: +{t.reward.gold} золота, +{t.reward.xp} опыта</span>}
+        </div>
+      </div>
+
+      {!done && t.status !== 'released' && (
+        <>
+          <div class="btns">
+            {!isCurrent && (
+              <button class="btn btn-gold" onClick={() => { close(); callToFire(ui, t); }}>
+                <GIcon name="campfire" size={18} />
+                {switchCost > 0 ? W.callToFireShort : <CallLabel />}
+                {switchCost > 0 && <small class="btn-cost">−{switchCost} маны</small>}
+              </button>
+            )}
+            <button class={`btn ${isCurrent ? 'btn-gold' : 'btn-ghost'}`} onClick={() => { close(); finish(ui, t, level ?? undefined); }}>
+              <GIcon name="check" size={17} />
+              {undead ? W.slay : W.done}
+            </button>
+          </div>
+          <Chips
+            label="Уровень при сдаче"
+            value={level ?? t.level}
+            options={([1, 2, 3, 4] as Level[]).map((l) => ({ value: l, label: LEVEL_ROMAN[l], hint: LEVEL_HINT[l] }))}
+            onChange={setLevel}
+          />
+          <div class="actions">
+            {inToday ? (
+              <button class="act" onClick={() => ui.store.act((st) => planTask(st, t.id, null))}>
+                <LIcon name="close" size={16} />
+                Убрать из плана дня
+              </button>
+            ) : (
+              <button class="act" onClick={() => ui.store.act((st) => planTask(st, t.id, st.day))}>
+                <GIcon name="campfire" size={16} />
+                К костру сегодня
+              </button>
+            )}
+            <button class="act" onClick={() => ui.store.act((st) => planTask(st, t.id, addDays(st.day, 1)))}>
+              <LIcon name="calendar" size={16} />
+              На завтра
+            </button>
+            {inToday && (
+              <button class="act" onClick={() => ui.store.act((st) => setFrog(st, st.frogId === t.id ? null : t.id))}>
+                <GIcon name="frog" size={16} />
+                {s.frogId === t.id ? 'Больше не лягушка' : 'Сделать лягушкой дня'}
+              </button>
+            )}
+            {undead && (
+              <button class="act" onClick={() => ui.store.act((st) => updateTask(st, t.id, { due: addDays(st.day, 1) }))}>
+                <LIcon name="calendar" size={16} />
+                Перенести срок на завтра
+              </button>
+            )}
+            <button class="act" onClick={() => ui.open({ kind: 'edit', taskId: t.id })}>
+              <LIcon name="edit" size={16} />
+              Изменить
+            </button>
+            <button
+              class="act act-danger"
+              onClick={() => {
+                ui.store.act((st, now) => release(st, now, t.id));
+                ui.toast('Спутник отпущен');
+                close();
+              }}
+            >
+              <LIcon name="trash" size={16} />
+              {W.release}
+            </button>
+          </div>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+// ---------- письма ----------
+
+function LettersSheet({ ui }: { ui: Ui }) {
+  const s = ui.store.state;
+  const letters = inboxOf(s);
+  const quests = s.quests.filter((q) => !q.wonAt);
+  return (
+    <Sheet title={`${W.inbox} у вестника`} onClose={ui.close}>
+      {letters.length === 0 && <p class="note">Писем нет. Всё разобрано.</p>}
+      {letters.map((t) => (
+        <Letter key={t.id} ui={ui} t={t} quests={quests} />
+      ))}
+    </Sheet>
+  );
+}
+
+function Letter({ ui, t, quests }: { ui: Ui; t: Task; quests: State['quests'] }) {
+  const [questId, setQuestId] = useState<string | null>(quests[0]?.id ?? null);
+  return (
+    <div class="letter">
+      <div class="letter-title">
+        <LIcon name="envelope" size={16} />
+        {t.title}
+      </div>
+      <div class="chips">
+        {quests.map((q) => (
+          <button key={q.id} class={`chipbtn${questId === q.id ? ' is-on' : ''}`} onClick={() => setQuestId(q.id)} aria-pressed={questId === q.id}>
+            {q.name}
+          </button>
+        ))}
+      </div>
+      <div class="letter-btns">
+        <button class="btn btn-gold btn-sm" disabled={!questId} onClick={() => ui.store.act((st) => { updateTask(st, t.id, { questId }); planTask(st, t.id, st.day); })}>
+          На сегодня
+        </button>
+        <button class="btn btn-ghost btn-sm" disabled={!questId} onClick={() => ui.store.act((st) => updateTask(st, t.id, { questId }))}>
+          В отряд
+        </button>
+        <button class="btn btn-ghost btn-sm" onClick={() => ui.store.act((st, now) => release(st, now, t.id))}>
+          {W.release}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- лягушка ----------
+
+function FrogSheet({ ui }: { ui: Ui }) {
+  const s = ui.store.state;
+  const plan = planOf(s).filter((t) => t.status === 'open');
+  return (
+    <Sheet title={W.frogTitle} onClose={ui.close}>
+      <p class="note">Самая тяжёлая задача дня. Сделай её первой из серьёзных, и опыт за неё удвоится.</p>
+      {plan.length === 0 && <p class="note">Сначала позови задачи к костру.</p>}
+      {plan.map((t) => (
+        <button
+          key={t.id}
+          class={`row row-pick${s.frogId === t.id ? ' is-on' : ''}`}
+          onClick={() => {
+            ui.store.act((st) => setFrog(st, t.id));
+            ui.close();
+          }}
+        >
+          <GIcon name="frog" size={16} class={s.frogId === t.id ? 'ic-green' : 'ic-dim'} />
+          <span class="row-title">{t.title}</span>
+          <span class="meta">{LEVEL_ROMAN[t.level]} ур.</span>
+        </button>
+      ))}
+    </Sheet>
+  );
+}
+
+// ---------- итоги дня ----------
+
+function SummarySheet({ ui }: { ui: Ui }) {
+  const s = ui.store.state;
+  const l = s.log[s.day];
+  const open = planOf(s).filter((t) => t.status === 'open');
+  const [keep, setKeep] = useState<Set<string>>(() => new Set(open.map((t) => t.id)));
+  const toggle = (id: string) => {
+    const next = new Set(keep);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setKeep(next);
+  };
+  const hm = (ms: number) => formatDuration(Math.round(ms / 60_000));
+  return (
+    <Sheet
+      title="Итоги дня"
+      onClose={ui.close}
+      footer={
+        <div class="btns">
+          <button class="btn btn-gold" onClick={() => { ui.store.act((st, now) => endDay(st, now, [...keep])); ui.close(); ui.go('camp'); }}>
+            <GIcon name="zzz" size={17} />
+            {W.lightsOut}
+          </button>
+          <button class="btn btn-ghost" onClick={ui.close}>
+            {W.notSleeping}
+          </button>
+        </div>
+      }
+    >
+      <div class="stats">
+        <Stat v={String(l?.done ?? 0)} label="сделано" />
+        <Stat v={`+${l?.gold ?? 0}`} label="золота" />
+        <Stat v={`+${l?.xp ?? 0}`} label="опыта" />
+        <Stat v={hm(l?.workedMs ?? 0)} label="в пути" />
+        <Stat v={hm(l?.restMs ?? 0)} label="на привале" />
+        <Stat v={String(l?.undeadSlain ?? 0)} label="нежити упокоено" />
+      </div>
+      {open.length > 0 && (
+        <>
+          <div class="field-label">{W.keepAtFire}?</div>
+          {open.map((t) => (
+            <label key={t.id} class="check-row">
+              <input type="checkbox" checked={keep.has(t.id)} onChange={() => toggle(t.id)} />
+              <span class="row-title">{t.title}</span>
+              <TaskMeta s={s} t={t} />
+            </label>
+          ))}
+          <p class="note">Без галочки задача вернётся в отряд и будет ждать следующего сбора.</p>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+function Stat({ v, label }: { v: string; label: string }) {
+  return (
+    <div class="stat">
+      <div class="stat-v">{v}</div>
+      <div class="stat-l">{label}</div>
+    </div>
+  );
+}
+
+// ---------- походы ----------
+
+const COLORS: QuestColor[] = ['red', 'blue', 'green', 'yellow', 'purple', 'brown'];
+
+function QuestForm({ ui, questId }: { ui: Ui; questId?: string }) {
+  const s = ui.store.state;
+  const q = questId ? findQuest(s, questId) : undefined;
+  const [name, setName] = useState(q?.name ?? '');
+  const [kind, setKind] = useState<QuestKind>(q?.kind ?? 'work');
+  const [color, setColor] = useState<QuestColor>(q?.color ?? COLORS[s.quests.length % COLORS.length]);
+  const save = () => {
+    if (!name.trim()) return;
+    if (q) ui.store.act((st) => updateQuest(st, q.id, { name: name.trim(), kind, color }));
+    else ui.store.act((st, now) => addQuest(st, now, { name, kind, color }));
+    ui.close();
+  };
+  return (
+    <Sheet title={q ? 'Поход' : 'Новый поход'} onClose={ui.close} footer={<button class="btn btn-gold btn-wide" onClick={save}>{q ? 'Сохранить' : 'Выступить в поход'}</button>}>
+      <label class="field">
+        <span class="field-label">Название</span>
+        <input class="input" value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="Например, сертификат Fullstack" maxLength={60} />
+      </label>
+      <Chips
+        label={`Когда: ${QUEST_KIND_HINT[kind]}`}
+        value={kind}
+        options={(['work', 'personal', 'any'] as QuestKind[]).map((k) => ({ value: k, label: QUEST_KIND_NAME[k] }))}
+        onChange={setKind}
+      />
+      <div class="field">
+        <div class="field-label">Знамя</div>
+        <div class="chips">
+          {COLORS.map((c) => (
+            <button key={c} class={`swatch qdot-${c}${c === color ? ' is-on' : ''}`} aria-label={c} aria-pressed={c === color} onClick={() => setColor(c)} />
+          ))}
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+function QuestSheet({ ui, questId }: { ui: Ui; questId: string }) {
+  const s = ui.store.state;
+  const q = findQuest(s, questId);
+  if (!q) return null;
+  const lair = lairOf(s, q.id);
+  const open = s.tasks.filter((t) => t.questId === q.id && t.status === 'open');
+  const done = s.tasks.filter((t) => t.questId === q.id && t.status === 'done').length;
+  return (
+    <Sheet title={q.name} onClose={ui.close}>
+      <div class="task-sub">
+        <QuestDot q={q} />
+        {QUEST_KIND_NAME[q.kind]} поход · {done} сделано · {open.length} в отряде
+      </div>
+      {lair.max > 0 && (
+        <div class="lair">
+          <span>Логово {lair.hp} / {lair.max}</span>
+          <span class="bar bar-red" aria-hidden="true">
+            <span style={{ width: `${(lair.hp / lair.max) * 100}%` }} />
+          </span>
+        </div>
+      )}
+      {lair.max > 0 && lair.hp === 0 && !q.wonAt && (
+        <button class="btn btn-gold btn-wide" onClick={() => { ui.store.act((st, now) => winQuest(st, now, q.id)); ui.toast('Логово пало! Поход в зале трофеев'); ui.close(); }}>
+          Логово пало: завершить поход
+        </button>
+      )}
+      <div class="sublist">
+        {open.map((t) => (
+          <button key={t.id} class="row" onClick={() => ui.open({ kind: 'task', taskId: t.id })}>
+            <span class={`num num-${isUndead(t, s.day) ? 'undead' : t.day === s.day ? 'today' : 'idle'} num-sm`}>{LEVEL_ROMAN[t.level]}</span>
+            <span class="row-title">{t.title}</span>
+            <TaskMeta s={s} t={t} />
+          </button>
+        ))}
+      </div>
+      <div class="actions">
+        <button class="act" onClick={() => ui.open({ kind: 'add', questId: q.id, day: null })}>
+          <LIcon name="plus" size={16} />
+          Задача в этот поход
+        </button>
+        <button class="act" onClick={() => ui.open({ kind: 'editQuest', questId: q.id })}>
+          <LIcon name="edit" size={16} />
+          Изменить поход
+        </button>
+        <button
+          class="act act-danger"
+          onClick={() => {
+            if (!confirm(`Убрать поход «${q.name}»? Его задачи вернутся письмами к вестнику.`)) return;
+            ui.store.act((st) => removeQuest(st, q.id));
+            ui.close();
+          }}
+        >
+          <LIcon name="trash" size={16} />
+          Убрать поход
+        </button>
+      </div>
+    </Sheet>
+  );
+}

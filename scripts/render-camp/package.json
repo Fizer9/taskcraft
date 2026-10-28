@@ -1,0 +1,17 @@
+{
+  "name": "render-camp",
+  "private": true,
+  "type": "module",
+  "description": "Рендер картинок лагеря из моделей KayKit. Запускается руками, в сборку приложения не входит.",
+  "scripts": {
+    "models": "node fetch-models.mjs",
+    "render": "node render.mjs",
+    "preview": "node render.mjs preview",
+    "icons": "node make-icons.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1",
+    "sharp": "0.34.5",
+    "three": "0.170.0"
+  }
+}

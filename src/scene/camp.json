@@ -1,0 +1,907 @@
+{
+ "version": "69372287",
+ "size": [
+  780,
+  840
+ ],
+ "backgrounds": {
+  "day": "bg-day.webp",
+  "evening": "bg-evening.webp",
+  "night": "bg-night.webp"
+ },
+ "layers": {
+  "fire/day": {
+   "file": "fire-day.webp",
+   "x": 299,
+   "y": 419,
+   "w": 184,
+   "h": 217
+  },
+  "fire/evening": {
+   "file": "fire-evening.webp",
+   "x": 299,
+   "y": 419,
+   "w": 184,
+   "h": 217
+  },
+  "fire/night": {
+   "file": "fire-night.webp",
+   "x": 299,
+   "y": 419,
+   "w": 184,
+   "h": 217
+  }
+ },
+ "spots": {
+  "ring": [
+   626,
+   624
+  ],
+  "seat0": [
+   175,
+   480
+  ],
+  "seat1": [
+   319,
+   400
+  ],
+  "seat2": [
+   492,
+   408
+  ],
+  "seat3": [
+   142,
+   645
+  ],
+  "seat4": [
+   273,
+   764
+  ],
+  "seat5": [
+   498,
+   768
+  ],
+  "road0": [
+   437,
+   301
+  ],
+  "road1": [
+   508,
+   267
+  ],
+  "road2": [
+   443,
+   231
+  ]
+ },
+ "sprites": {
+  "ring/rogue/work": {
+   "file": "ring-rogue-work.webp",
+   "x": 539,
+   "y": 524,
+   "w": 241,
+   "h": 178,
+   "head": [
+    618,
+    536
+   ]
+  },
+  "ring/rogue/sit": {
+   "file": "ring-rogue-sit.webp",
+   "x": 557,
+   "y": 517,
+   "w": 223,
+   "h": 157,
+   "head": [
+    646,
+    523
+   ]
+  },
+  "ring/rogue/cheer": {
+   "file": "ring-rogue-cheer.webp",
+   "x": 544,
+   "y": 519,
+   "w": 236,
+   "h": 172,
+   "head": [
+    627,
+    518
+   ]
+  },
+  "seat0/rogue/sit": {
+   "file": "seat0-rogue-sit.webp",
+   "x": 0,
+   "y": 354,
+   "w": 228,
+   "h": 172,
+   "head": [
+    176,
+    400
+   ]
+  },
+  "seat0/rogue/lie": {
+   "file": "seat0-rogue-lie.webp",
+   "x": 0,
+   "y": 354,
+   "w": 265,
+   "h": 223,
+   "head": [
+    194,
+    480
+   ],
+   "lit": true
+  },
+  "seat1/rogue/sit": {
+   "file": "seat1-rogue-sit.webp",
+   "x": 100,
+   "y": 56,
+   "w": 282,
+   "h": 369,
+   "head": [
+    311,
+    323
+   ]
+  },
+  "seat1/rogue/lie": {
+   "file": "seat1-rogue-lie.webp",
+   "x": 148,
+   "y": 270,
+   "w": 234,
+   "h": 208,
+   "head": [
+    299,
+    388
+   ],
+   "lit": true
+  },
+  "seat2/rogue/sit": {
+   "file": "seat2-rogue-sit.webp",
+   "x": 412,
+   "y": 69,
+   "w": 363,
+   "h": 368,
+   "head": [
+    482,
+    327
+   ]
+  },
+  "seat2/rogue/lie": {
+   "file": "seat2-rogue-lie.webp",
+   "x": 377,
+   "y": 265,
+   "w": 277,
+   "h": 223,
+   "head": [
+    446,
+    390
+   ],
+   "lit": true
+  },
+  "seat3/rogue/sit": {
+   "file": "seat3-rogue-sit.webp",
+   "x": 0,
+   "y": 543,
+   "w": 193,
+   "h": 253,
+   "head": [
+    149,
+    554
+   ]
+  },
+  "seat3/rogue/lie": {
+   "file": "seat3-rogue-lie.webp",
+   "x": 0,
+   "y": 565,
+   "w": 241,
+   "h": 274,
+   "head": [
+    179,
+    620
+   ],
+   "lit": true
+  },
+  "seat4/rogue/sit": {
+   "file": "seat4-rogue-sit.webp",
+   "x": 94,
+   "y": 657,
+   "w": 258,
+   "h": 183,
+   "head": [
+    286,
+    660
+   ]
+  },
+  "seat4/rogue/lie": {
+   "file": "seat4-rogue-lie.webp",
+   "x": 94,
+   "y": 651,
+   "w": 311,
+   "h": 189,
+   "head": [
+    331,
+    700
+   ],
+   "lit": true
+  },
+  "seat5/rogue/sit": {
+   "file": "seat5-rogue-sit.webp",
+   "x": 401,
+   "y": 660,
+   "w": 266,
+   "h": 180,
+   "head": [
+    505,
+    659
+   ]
+  },
+  "seat5/rogue/lie": {
+   "file": "seat5-rogue-lie.webp",
+   "x": 405,
+   "y": 656,
+   "w": 324,
+   "h": 184,
+   "head": [
+    515,
+    694
+   ],
+   "lit": true
+  },
+  "ring/barbarian/work": {
+   "file": "ring-barbarian-work.webp",
+   "x": 543,
+   "y": 505,
+   "w": 237,
+   "h": 183,
+   "head": [
+    661,
+    539
+   ]
+  },
+  "ring/barbarian/sit": {
+   "file": "ring-barbarian-sit.webp",
+   "x": 546,
+   "y": 500,
+   "w": 234,
+   "h": 225,
+   "head": [
+    643,
+    525
+   ]
+  },
+  "ring/barbarian/cheer": {
+   "file": "ring-barbarian-cheer.webp",
+   "x": 533,
+   "y": 491,
+   "w": 247,
+   "h": 201,
+   "head": [
+    635,
+    521
+   ]
+  },
+  "seat0/barbarian/sit": {
+   "file": "seat0-barbarian-sit.webp",
+   "x": 0,
+   "y": 354,
+   "w": 250,
+   "h": 172,
+   "head": [
+    185,
+    384
+   ]
+  },
+  "seat0/barbarian/lie": {
+   "file": "seat0-barbarian-lie.webp",
+   "x": 0,
+   "y": 354,
+   "w": 266,
+   "h": 227,
+   "head": [
+    183,
+    469
+   ],
+   "lit": true
+  },
+  "seat1/barbarian/sit": {
+   "file": "seat1-barbarian-sit.webp",
+   "x": 121,
+   "y": 56,
+   "w": 261,
+   "h": 382,
+   "head": [
+    319,
+    318
+   ]
+  },
+  "seat1/barbarian/lie": {
+   "file": "seat1-barbarian-lie.webp",
+   "x": 56,
+   "y": 249,
+   "w": 326,
+   "h": 229,
+   "head": [
+    294,
+    381
+   ],
+   "lit": true
+  },
+  "seat2/barbarian/sit": {
+   "file": "seat2-barbarian-sit.webp",
+   "x": 403,
+   "y": 74,
+   "w": 365,
+   "h": 377,
+   "head": [
+    498,
+    326
+   ]
+  },
+  "seat2/barbarian/lie": {
+   "file": "seat2-barbarian-lie.webp",
+   "x": 376,
+   "y": 184,
+   "w": 278,
+   "h": 304,
+   "head": [
+    443,
+    372
+   ],
+   "lit": true
+  },
+  "seat3/barbarian/sit": {
+   "file": "seat3-barbarian-sit.webp",
+   "x": 0,
+   "y": 525,
+   "w": 218,
+   "h": 271,
+   "head": [
+    149,
+    543
+   ]
+  },
+  "seat3/barbarian/lie": {
+   "file": "seat3-barbarian-lie.webp",
+   "x": 0,
+   "y": 565,
+   "w": 244,
+   "h": 275,
+   "head": [
+    188,
+    609
+   ],
+   "lit": true
+  },
+  "seat4/barbarian/sit": {
+   "file": "seat4-barbarian-sit.webp",
+   "x": 94,
+   "y": 646,
+   "w": 258,
+   "h": 194,
+   "head": [
+    266,
+    646
+   ]
+  },
+  "seat4/barbarian/lie": {
+   "file": "seat4-barbarian-lie.webp",
+   "x": 94,
+   "y": 650,
+   "w": 305,
+   "h": 190,
+   "head": [
+    334,
+    693
+   ],
+   "lit": true
+  },
+  "seat5/barbarian/sit": {
+   "file": "seat5-barbarian-sit.webp",
+   "x": 389,
+   "y": 649,
+   "w": 278,
+   "h": 191,
+   "head": [
+    497,
+    653
+   ]
+  },
+  "seat5/barbarian/lie": {
+   "file": "seat5-barbarian-lie.webp",
+   "x": 405,
+   "y": 652,
+   "w": 360,
+   "h": 188,
+   "head": [
+    519,
+    671
+   ],
+   "lit": true
+  },
+  "ring/mage/work": {
+   "file": "ring-mage-work.webp",
+   "x": 498,
+   "y": 507,
+   "w": 282,
+   "h": 187,
+   "head": [
+    652,
+    500
+   ]
+  },
+  "ring/mage/sit": {
+   "file": "ring-mage-sit.webp",
+   "x": 527,
+   "y": 500,
+   "w": 253,
+   "h": 176,
+   "head": [
+    680,
+    495
+   ]
+  },
+  "ring/mage/cheer": {
+   "file": "ring-mage-cheer.webp",
+   "x": 513,
+   "y": 503,
+   "w": 267,
+   "h": 196,
+   "head": [
+    658,
+    491
+   ]
+  },
+  "seat0/mage/sit": {
+   "file": "seat0-mage-sit.webp",
+   "x": 0,
+   "y": 354,
+   "w": 239,
+   "h": 172,
+   "head": [
+    154,
+    355
+   ]
+  },
+  "seat0/mage/lie": {
+   "file": "seat0-mage-lie.webp",
+   "x": 0,
+   "y": 354,
+   "w": 267,
+   "h": 241,
+   "head": [
+    163,
+    454
+   ],
+   "lit": true
+  },
+  "seat1/mage/sit": {
+   "file": "seat1-mage-sit.webp",
+   "x": 130,
+   "y": 59,
+   "w": 252,
+   "h": 369,
+   "head": [
+    312,
+    275
+   ]
+  },
+  "seat1/mage/lie": {
+   "file": "seat1-mage-lie.webp",
+   "x": 8,
+   "y": 90,
+   "w": 374,
+   "h": 410,
+   "head": [
+    279,
+    366
+   ],
+   "lit": true
+  },
+  "seat2/mage/sit": {
+   "file": "seat2-mage-sit.webp",
+   "x": 388,
+   "y": 75,
+   "w": 357,
+   "h": 365,
+   "head": [
+    501,
+    283
+   ]
+  },
+  "seat2/mage/lie": {
+   "file": "seat2-mage-lie.webp",
+   "x": 356,
+   "y": 56,
+   "w": 298,
+   "h": 432,
+   "head": [
+    429,
+    337
+   ],
+   "lit": true
+  },
+  "seat3/mage/sit": {
+   "file": "seat3-mage-sit.webp",
+   "x": 0,
+   "y": 522,
+   "w": 208,
+   "h": 274,
+   "head": [
+    114,
+    525
+   ]
+  },
+  "seat3/mage/lie": {
+   "file": "seat3-mage-lie.webp",
+   "x": 0,
+   "y": 565,
+   "w": 275,
+   "h": 275,
+   "head": [
+    206,
+    597
+   ],
+   "lit": true
+  },
+  "seat4/mage/sit": {
+   "file": "seat4-mage-sit.webp",
+   "x": 94,
+   "y": 630,
+   "w": 258,
+   "h": 210,
+   "head": [
+    259,
+    649
+   ]
+  },
+  "seat4/mage/lie": {
+   "file": "seat4-mage-lie.webp",
+   "x": 94,
+   "y": 650,
+   "w": 329,
+   "h": 190,
+   "head": [
+    350,
+    680
+   ],
+   "lit": true
+  },
+  "seat5/mage/sit": {
+   "file": "seat5-mage-sit.webp",
+   "x": 371,
+   "y": 633,
+   "w": 296,
+   "h": 207,
+   "head": [
+    511,
+    652
+   ]
+  },
+  "seat5/mage/lie": {
+   "file": "seat5-mage-lie.webp",
+   "x": 405,
+   "y": 625,
+   "w": 375,
+   "h": 215,
+   "head": [
+    538,
+    626
+   ],
+   "lit": true
+  },
+  "ring/knight/work": {
+   "file": "ring-knight-work.webp",
+   "x": 495,
+   "y": 512,
+   "w": 285,
+   "h": 215,
+   "head": [
+    629,
+    531
+   ]
+  },
+  "ring/knight/sit": {
+   "file": "ring-knight-sit.webp",
+   "x": 546,
+   "y": 503,
+   "w": 234,
+   "h": 207,
+   "head": [
+    636,
+    531
+   ]
+  },
+  "ring/knight/cheer": {
+   "file": "ring-knight-cheer.webp",
+   "x": 534,
+   "y": 500,
+   "w": 246,
+   "h": 191,
+   "head": [
+    653,
+    515
+   ]
+  },
+  "seat0/knight/sit": {
+   "file": "seat0-knight-sit.webp",
+   "x": 0,
+   "y": 349,
+   "w": 248,
+   "h": 177,
+   "head": [
+    200,
+    378
+   ]
+  },
+  "seat0/knight/lie": {
+   "file": "seat0-knight-lie.webp",
+   "x": 0,
+   "y": 354,
+   "w": 265,
+   "h": 229,
+   "head": [
+    180,
+    472
+   ],
+   "lit": true
+  },
+  "seat1/knight/sit": {
+   "file": "seat1-knight-sit.webp",
+   "x": 110,
+   "y": 57,
+   "w": 272,
+   "h": 370,
+   "head": [
+    331,
+    319
+   ]
+  },
+  "seat1/knight/lie": {
+   "file": "seat1-knight-lie.webp",
+   "x": 83,
+   "y": 269,
+   "w": 299,
+   "h": 209,
+   "head": [
+    284,
+    382
+   ],
+   "lit": true
+  },
+  "seat2/knight/sit": {
+   "file": "seat2-knight-sit.webp",
+   "x": 405,
+   "y": 71,
+   "w": 360,
+   "h": 372,
+   "head": [
+    503,
+    333
+   ]
+  },
+  "seat2/knight/lie": {
+   "file": "seat2-knight-lie.webp",
+   "x": 374,
+   "y": 210,
+   "w": 280,
+   "h": 278,
+   "head": [
+    437,
+    370
+   ],
+   "lit": true
+  },
+  "seat3/knight/sit": {
+   "file": "seat3-knight-sit.webp",
+   "x": 0,
+   "y": 528,
+   "w": 209,
+   "h": 268,
+   "head": [
+    157,
+    528
+   ]
+  },
+  "seat3/knight/lie": {
+   "file": "seat3-knight-lie.webp",
+   "x": 0,
+   "y": 565,
+   "w": 242,
+   "h": 275,
+   "head": [
+    189,
+    618
+   ],
+   "lit": true
+  },
+  "seat4/knight/sit": {
+   "file": "seat4-knight-sit.webp",
+   "x": 94,
+   "y": 645,
+   "w": 258,
+   "h": 195,
+   "head": [
+    262,
+    630
+   ]
+  },
+  "seat4/knight/lie": {
+   "file": "seat4-knight-lie.webp",
+   "x": 94,
+   "y": 651,
+   "w": 310,
+   "h": 189,
+   "head": [
+    341,
+    693
+   ],
+   "lit": true
+  },
+  "seat5/knight/sit": {
+   "file": "seat5-knight-sit.webp",
+   "x": 392,
+   "y": 647,
+   "w": 275,
+   "h": 193,
+   "head": [
+    480,
+    644
+   ]
+  },
+  "seat5/knight/lie": {
+   "file": "seat5-knight-lie.webp",
+   "x": 405,
+   "y": 653,
+   "w": 361,
+   "h": 187,
+   "head": [
+    532,
+    667
+   ],
+   "lit": true
+  },
+  "road0/skeleton-minion/stand": {
+   "file": "road0-skeleton-minion-stand.webp",
+   "x": 374,
+   "y": 49,
+   "w": 148,
+   "h": 264,
+   "head": [
+    439,
+    236
+   ]
+  },
+  "road1/skeleton-minion/stand": {
+   "file": "road1-skeleton-minion-stand.webp",
+   "x": 442,
+   "y": 58,
+   "w": 184,
+   "h": 220,
+   "head": [
+    514,
+    202
+   ]
+  },
+  "road2/skeleton-minion/stand": {
+   "file": "road2-skeleton-minion-stand.webp",
+   "x": 383,
+   "y": 49,
+   "w": 130,
+   "h": 193,
+   "head": [
+    446,
+    167
+   ]
+  },
+  "road0/skeleton-rogue/stand": {
+   "file": "road0-skeleton-rogue-stand.webp",
+   "x": 370,
+   "y": 49,
+   "w": 165,
+   "h": 267,
+   "head": [
+    440,
+    219
+   ]
+  },
+  "road1/skeleton-rogue/stand": {
+   "file": "road1-skeleton-rogue-stand.webp",
+   "x": 440,
+   "y": 58,
+   "w": 183,
+   "h": 222,
+   "head": [
+    511,
+    185
+   ]
+  },
+  "road2/skeleton-rogue/stand": {
+   "file": "road2-skeleton-rogue-stand.webp",
+   "x": 380,
+   "y": 49,
+   "w": 136,
+   "h": 195,
+   "head": [
+    446,
+    150
+   ]
+  },
+  "road0/skeleton-warrior/stand": {
+   "file": "road0-skeleton-warrior-stand.webp",
+   "x": 350,
+   "y": 49,
+   "w": 180,
+   "h": 269,
+   "head": [
+    437,
+    214
+   ]
+  },
+  "road1/skeleton-warrior/stand": {
+   "file": "road1-skeleton-warrior-stand.webp",
+   "x": 420,
+   "y": 58,
+   "w": 206,
+   "h": 224,
+   "head": [
+    509,
+    179
+   ]
+  },
+  "road2/skeleton-warrior/stand": {
+   "file": "road2-skeleton-warrior-stand.webp",
+   "x": 360,
+   "y": 49,
+   "w": 156,
+   "h": 197,
+   "head": [
+    443,
+    144
+   ]
+  },
+  "road0/skeleton-mage/stand": {
+   "file": "road0-skeleton-mage-stand.webp",
+   "x": 358,
+   "y": 49,
+   "w": 168,
+   "h": 277,
+   "head": [
+    435,
+    213
+   ]
+  },
+  "road1/skeleton-mage/stand": {
+   "file": "road1-skeleton-mage-stand.webp",
+   "x": 427,
+   "y": 58,
+   "w": 202,
+   "h": 232,
+   "head": [
+    507,
+    177
+   ]
+  },
+  "road2/skeleton-mage/stand": {
+   "file": "road2-skeleton-mage-stand.webp",
+   "x": 368,
+   "y": 49,
+   "w": 145,
+   "h": 204,
+   "head": [
+    442,
+    143
+   ]
+  }
+ },
+ "fire": [
+  390,
+  551
+ ],
+ "chest": [
+  679,
+  451
+ ],
+ "messenger": [
+  254,
+  251
+ ]
+}

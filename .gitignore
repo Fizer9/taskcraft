@@ -1,0 +1,7 @@
+node_modules/
+dist/
+scripts/render-camp/node_modules/
+scripts/render-camp/kaykit/
+scripts/render-camp/out/
+*.log
+.DS_Store
