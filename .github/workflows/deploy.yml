@@ -1,6 +1,8 @@
 # Сборка и публикация на GitHub Pages при каждом пуше в main. Сайт не обновится, если упали тесты
 # логики или автотесты экранов на собранном сайте, или если не задан пароль сайта
 # (секрет LAGER_PASSWORD, как его добавить, сказано в README).
+# Пока сайт открытый: LAGER_PUBLIC: '1' ниже. Чтобы закрыть его паролем, задай секрет LAGER_PASSWORD
+# и убери строку LAGER_PUBLIC.
 name: Публикация
 
 on:
@@ -17,6 +19,9 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  LAGER_PUBLIC: '1'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,13 +35,13 @@ jobs:
         env:
           LAGER_PASSWORD: ${{ secrets.LAGER_PASSWORD }}
         run: |
-          if [ -z "$LAGER_PASSWORD" ]; then
+          if [ -z "$LAGER_PASSWORD" ] && [ "$LAGER_PUBLIC" != "1" ]; then
             echo "::error::Не задан пароль сайта. Добавь его: Settings → Secrets and variables → Actions → New repository secret, имя LAGER_PASSWORD."
             exit 1
           fi
       - run: npm ci
       - run: npm test
-      - name: Сборка с паролем
+      - name: Сборка
         env:
           LAGER_PASSWORD: ${{ secrets.LAGER_PASSWORD }}
         run: npm run build
